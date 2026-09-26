@@ -34,7 +34,7 @@ def run_stryker(project: Project, output_dir: Path, index: int, timeout: float =
     report_path = output_dir / f"mutation-{index}.json"
     config_path = output_dir / f"stryker-{index}.config.json"
     report_path.unlink(missing_ok=True)
-    temp_dir = project.root / ".regress" / "stryker-tmp"
+    temp_dir = output_dir / "tmp"  # per run, so concurrent runs never share a sandbox
     config_path.write_text(json.dumps(stryker_config(project, report_path, temp_dir), indent=2))
 
     args = project.toolchain.command("stryker", "run", _rel(config_path, project.root))
