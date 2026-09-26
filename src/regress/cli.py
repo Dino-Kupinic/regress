@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 from pathlib import Path
 from typing import Annotated, Literal, NoReturn
 
@@ -11,10 +12,18 @@ from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
-from regress.config import CONFIG_FILE, CONFIG_TEMPLATE, load_settings
-from regress.errors import RegressError, ToolError
+from regress.catalog import load_catalog
+from regress.config import (
+    CONFIG_FILE,
+    CONFIG_TEMPLATE,
+    Settings,
+    load_settings,
+    save_user_settings,
+    user_config_path,
+)
+from regress.errors import ProjectError, RegressError, ToolError
 from regress.evaluation import EvalResult, evaluate_oracles, evaluate_regress, load_suites
-from regress.llm import OpenAILLM
+from regress.llm import OpenAILLM, require_api_key
 from regress.pipeline import Pipeline, RunOptions
 from regress.process import run_command
 from regress.project import (
@@ -28,7 +37,14 @@ from regress.project import (
     package_version,
 )
 from regress.store import RunStore, regress_dir
-from regress.ui import ConsoleReporter, format_score, render_report, render_run_list
+from regress.ui import (
+    ConsoleReporter,
+    choose_model,
+    format_score,
+    render_models,
+    render_report,
+    render_run_list,
+)
 
 app = typer.Typer(
     name="regress",
@@ -44,11 +60,49 @@ RunnerOption = Annotated[
     Literal["auto", "bun", "npx"] | None,
     typer.Option(help="How to run Vitest and Stryker. [default: auto, from regress.toml]"),
 ]
+ModelOption = Annotated[
+    str | None,
+    typer.Option("--model", "-m", help="OpenAI model for this run. Skips the model question."),
+]
+YesOption = Annotated[
+    bool,
+    typer.Option("--yes", "-y", help="Don't ask anything; use the default model."),
+]
 
 
 def main() -> None:
     load_dotenv(find_dotenv(usecwd=True))
     app()
+
+
+def _interactive() -> bool:
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def _pick_model(settings: Settings, yes: bool) -> str:
+    """The model for this run: asked interactively unless it was given, remembered, or we can't ask."""
+    if yes or settings.model_is_explicit or not settings.ask_model or not _interactive():
+        return settings.model
+    with console.status("[dim]Fetching available models...[/]"):
+        catalog = load_catalog()
+    model, remember = choose_model(console, catalog, settings.model)
+    if remember:
+        path = save_user_settings(model=model, ask_model=False)
+        console.print(f"[dim]Saved to {escape(str(path))}. Change it any time with `regress models`.[/]")
+        if settings.model_source == "regress.toml" and model != settings.model:
+            console.print(
+                f"[yellow]! This project's regress.toml pins model = {escape(settings.model)}, "
+                "which wins over your default when nobody is asked.[/]"
+            )
+    console.print()
+    return model
+
+
+def _project_root_or_none(path: Path) -> Path | None:
+    try:
+        return find_project_root(path.expanduser().resolve())
+    except ProjectError:
+        return None
 
 
 def _fail(error: RegressError) -> NoReturn:
@@ -67,9 +121,7 @@ def run(
     rounds: Annotated[
         int | None, typer.Option(min=0, max=5, help="Improvement rounds after the first mutation run. [default: 1]")
     ] = None,
-    model: Annotated[
-        str | None, typer.Option("--model", "-m", help="OpenAI model. [default: gpt-5.5, or REGRESS_MODEL]")
-    ] = None,
+    model: ModelOption = None,
     baseline: Annotated[
         bool, typer.Option("--baseline", help="Also mutation-test the existing tests before generating.")
     ] = False,
@@ -84,13 +136,15 @@ def run(
     verbose: Annotated[
         bool, typer.Option("--verbose", "-v", help="Show validation details and model summaries.")
     ] = False,
+    yes: YesOption = False,
 ) -> None:
     """Generate tests for SOURCE, then improve them from surviving mutants."""
     try:
         root = find_project_root(source.expanduser().resolve().parent)
         settings = load_settings(root, rounds=rounds, model=model, runner=runner)
         project = load_project(source, test, settings.runner)
-        llm = OpenAILLM(settings.model, settings.reasoning_effort)
+        require_api_key()
+        llm = OpenAILLM(_pick_model(settings, yes), settings.reasoning_effort)
         options = RunOptions(
             rounds=settings.rounds,
             max_repairs=settings.max_repairs,
@@ -192,6 +246,43 @@ def _install_command(root: Path, packages: list[str]) -> list[str]:
     return ["bun", "add", "-d", *packages] if shutil.which("bun") else ["npm", "install", "-D", *packages]
 
 
+@app.command()
+def models(
+    set_model: Annotated[
+        str | None, typer.Option("--set", help="Make this your default model (saved in your user config).")
+    ] = None,
+    ask: Annotated[
+        bool | None, typer.Option("--ask/--no-ask", help="Whether `regress run` asks which model to use.")
+    ] = None,
+    show_all: Annotated[bool, typer.Option("--all", help="Include dated snapshots and every older model.")] = False,
+    refresh: Annotated[
+        bool, typer.Option("--refresh", help="Fetch the list again instead of using the cache.")
+    ] = False,
+) -> None:
+    """List the latest models and choose your default."""
+    try:
+        with console.status("[dim]Fetching available models...[/]"):
+            catalog = load_catalog(refresh=refresh)
+        changes: dict[str, object] = {}
+        if set_model is not None:
+            if catalog.verified and not catalog.has(set_model):
+                hint = catalog.suggestions(set_model)
+                suffix = f" Did you mean {', '.join(hint)}?" if hint else " See `regress models --all`."
+                raise RegressError(f"{set_model} is not available to your API key.{suffix}")
+            changes["model"] = set_model
+        if ask is not None:
+            changes["ask_model"] = ask
+        if changes:
+            path = save_user_settings(**changes)
+            console.print(f"[green]✓[/] Saved to {escape(str(path))}\n")
+        settings = load_settings(_project_root_or_none(Path.cwd()))
+        render_models(console, catalog, settings, user_config_path(), show_all)
+        if set_model is not None and settings.model != set_model:
+            console.print(f"[yellow]! {settings.model_source} overrides your default here.[/]")
+    except RegressError as error:
+        _fail(error)
+
+
 @app.command("eval")
 def eval_command(
     examples: Annotated[Path, typer.Argument(help="Examples project with a hidden-bugs/ directory.")] = Path(
@@ -205,9 +296,10 @@ def eval_command(
         typer.Option("--oracle", help="Validate hidden bugs with the reference tests instead of running the model."),
     ] = False,
     rounds: Annotated[int | None, typer.Option(min=0, max=5, help="Improvement rounds per module.")] = None,
-    model: Annotated[str | None, typer.Option(help="OpenAI model.")] = None,
+    model: Annotated[str | None, typer.Option(help="OpenAI model. Skips the model question.")] = None,
     runner: RunnerOption = None,
     verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+    yes: YesOption = False,
 ) -> None:
     """Compare existing tests, one-shot AI tests, and Regress on example modules with hidden bugs."""
     try:
@@ -222,6 +314,8 @@ def eval_command(
             with console.status("[dim]Checking hidden bugs against the oracle tests...[/]"):
                 result = evaluate_oracles(examples, suites, settings.runner, on_module=None)
         else:
+            require_api_key()
+            chosen = _pick_model(settings, yes)
             options = RunOptions(
                 rounds=settings.rounds,
                 max_repairs=settings.max_repairs,
@@ -232,7 +326,7 @@ def eval_command(
             result = evaluate_regress(
                 examples,
                 suites,
-                lambda: OpenAILLM(settings.model, settings.reasoning_effort),
+                lambda: OpenAILLM(chosen, settings.reasoning_effort),
                 options,
                 ConsoleReporter(console, verbose),
                 settings.runner,

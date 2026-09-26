@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from rich.console import Console
 from rich.markup import escape
 from rich.progress import Progress, ProgressColumn, SpinnerColumn, Task, TextColumn
+from rich.prompt import Confirm, Prompt
 from rich.table import Table
 from rich.text import Text
 
@@ -16,6 +17,8 @@ from regress.models import MutantStatus, MutationRun, RunReport, Stage
 from regress.mutants import short_description
 
 if TYPE_CHECKING:
+    from regress.catalog import Catalog
+    from regress.config import Settings
     from regress.project import Project
 
 LABEL_WIDTH = 18
@@ -284,3 +287,78 @@ def _display_path(path: Path) -> str:
     except ValueError:
         return str(path)
 
+
+PICKER_SIZE = 10
+
+
+def choose_model(
+    console: Console,
+    catalog: Catalog,
+    default: str,
+    ask: Callable[..., str] = Prompt.ask,
+    confirm: Callable[..., bool] = Confirm.ask,
+) -> tuple[str, bool]:
+    """Ask which model to use for this run. Returns (model, remember)."""
+    shown = [m.id for m in catalog.latest(PICKER_SIZE)]
+    if default not in shown:
+        shown.append(default)
+    newest = catalog.latest(1)[0].id if catalog.latest(1) else None
+    by_id = {m.id: m for m in catalog.models}
+
+    console.print(f"[bold]Which model should write the tests?[/] [dim]({catalog.describe()})[/]")
+    if catalog.note:
+        console.print(f"[dim]  {escape(catalog.note)}; the list may be out of date.[/]")
+    for number, model_id in enumerate(shown, start=1):
+        info = by_id.get(model_id)
+        tags = [tag for tag, on in (("newest", model_id == newest), ("default", model_id == default)) if on]
+        if info is not None and info.retiring:
+            tags.append(f"retiring {info.shutdown_date}")
+        created = info.created_date if info else ""
+        tag_text = f" [cyan]{', '.join(tags)}[/]" if tags else ""
+        console.print(f"  [bold]{number:>2}[/]  {escape(model_id):<24}[dim]{created:<11}[/]{tag_text}")
+
+    while True:
+        answer = ask("Model [dim](number or name)[/]", default=default, console=console).strip()
+        if answer.isdigit():
+            if 1 <= int(answer) <= len(shown):
+                choice = shown[int(answer) - 1]
+                break
+            console.print(f"[red]Pick a number from 1 to {len(shown)}.[/]")
+            continue
+        if answer and (not catalog.verified or catalog.has(answer) or answer == default):
+            choice = answer
+            break
+        hint = catalog.suggestions(answer)
+        suffix = f" Did you mean {', '.join(hint)}?" if hint else ""
+        console.print(f"[red]{escape(answer)} is not available to your API key.[/]{suffix}")
+
+    remember = confirm(f"Remember [bold]{escape(choice)}[/] and stop asking?", default=False, console=console)
+    return choice, remember
+
+
+def render_models(
+    console: Console, catalog: Catalog, settings: Settings, config_path: Path, show_all: bool = False
+) -> None:
+    models = catalog.latest(None if show_all else PICKER_SIZE, include_snapshots=show_all)
+    newest = catalog.latest(1)[0].id if catalog.latest(1) else None
+    console.print(f"[bold]Models[/] [dim]({catalog.describe()})[/]")
+    if catalog.note:
+        console.print(f"[yellow]  {escape(catalog.note)}; showing the SDK's list instead.[/]")
+    for info in models:
+        tags = [tag for tag, on in (("newest", info.id == newest), ("default", info.id == settings.model)) if on]
+        if info.retiring:
+            tags.append(f"retiring {info.shutdown_date}")
+        tag_text = f" [cyan]{', '.join(tags)}[/]" if tags else ""
+        console.print(f"  {escape(info.id):<26}[dim]{info.created_date:<11}[/]{tag_text}")
+    hidden = len(catalog.latest(None, include_snapshots=True)) - len(models)
+    if hidden > 0:
+        console.print(f"  [dim]...{hidden} more, including dated snapshots (--all)[/]")
+
+    source = settings.model_source
+    where = f"{source}: {_display_path(config_path)}" if source == "user config" else source
+    console.print()
+    console.print(f"Default model        [bold]{escape(settings.model)}[/] [dim]({escape(where)})[/]")
+    if catalog.verified and not catalog.has(settings.model):
+        console.print("[yellow]  ! not in the list of models available to your API key[/]")
+    console.print(f"Ask before each run  [bold]{'yes' if settings.ask_model else 'no'}[/]")
+    console.print("\n[dim]Change with `regress models --set <model>` and `regress models --ask/--no-ask`.[/]")

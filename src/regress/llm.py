@@ -38,11 +38,15 @@ class LLM(Protocol):
     def propose(self, instructions: str, prompt: str) -> Completion: ...
 
 
+def require_api_key() -> None:
+    if not os.environ.get("OPENAI_API_KEY"):
+        raise LLMError("OPENAI_API_KEY is not set. Export it or add it to a .env file.")
+
+
 class OpenAILLM:
     def __init__(self, model: str, reasoning_effort: str | None = None, client: openai.OpenAI | None = None) -> None:
         if client is None:
-            if not os.environ.get("OPENAI_API_KEY"):
-                raise LLMError("OPENAI_API_KEY is not set. Export it or add it to a .env file.")
+            require_api_key()
             client = openai.OpenAI(timeout=600, max_retries=2)
         self.client = client
         self.model = model
