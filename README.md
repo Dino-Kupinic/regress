@@ -31,8 +31,9 @@ Or run it from a checkout with `uv run regress ...`.
 
 ```bash
 regress init                 # check the project, install Vitest + Stryker, write regress.toml
-regress run src/cart.ts      # generate, mutation-test, improve, compare
+regress run src/cart.ts      # pick a model, generate, mutation-test, improve, compare
 regress report               # show the latest run (or: --list, <run-id>, --json)
+regress models               # list the latest models, set your default
 ```
 
 ```text
@@ -42,8 +43,11 @@ Analyzing src/cart.ts...
 
 Baseline tests         3
 
+✗ Attempt 1/3 rejected; asking the model to fix it
+  · Test "Cart applies a percent coupon" fails against the current implementation: AssertionError: expected 8 to be 10 // Object.is equality
 Generated tests        2
 Total tests            5
+Written by scripted in 0s · 2 attempts
 
 Mutation run #1 (generated tests, 3s)
 Killed                44
@@ -54,6 +58,7 @@ Score                50%
 Improving tests from surviving mutations... (sending 40 of 44)
 Added tests           22
 Total tests           27
+Written by scripted in 0s
 
 Mutation run #2 (improved tests, 4s)
 Killed                85
@@ -65,7 +70,7 @@ Improvement         +47%
 ✓ Kept improved tests in test/cart.test.ts
 ```
 
-(Output from a run with a scripted model; see [Evaluation](#evaluation) for real-model numbers.)
+This output is from a run with a scripted model. See [Evaluation](#evaluation) for real-model numbers. While Regress waits on the model, Vitest or Stryker, a spinner shows the elapsed time (`Improving tests with gpt-5.5... 42s`).
 
 Useful flags for `regress run`:
 
@@ -75,8 +80,34 @@ Useful flags for `regress run`:
 | `--rounds N` | Improvement rounds after the first mutation run (default 1). |
 | `--baseline` | Also mutation-test the existing tests first, for a before/after against them. |
 | `--no-generate` | Skip the one-shot round and improve the existing tests directly. |
-| `--model/-m` | OpenAI model (default `gpt-5.5`). |
+| `--model/-m` | OpenAI model for this run; skips the model question. |
+| `--yes/-y` | Ask nothing; use the default model. |
 | `--verbose/-v` | Show full validation errors and the model's summaries. |
+
+### Choosing a model
+
+Before each run, Regress lists the newest models your API key can use and asks which one should write the tests. Press Enter to keep the default. The list comes from the OpenAI API, is cached for a day, and falls back to the list bundled with the `openai` SDK when the API is unreachable. It only shows text models (no audio, realtime, image or embedding models), but any model your key has can be typed by name.
+
+```text
+Which model should write the tests? (fetched from the OpenAI API just now)
+   1  gpt-6-luna              2026-09-14  newest
+   2  gpt-6-sol               2026-09-14
+   ...
+   8  gpt-5.5                 2026-04-22  default
+Model (number or name) (gpt-5.5): 2
+Remember gpt-6-sol and stop asking? [y/n] (n): y
+```
+
+If you answer yes, Regress saves the model as your default in `~/.config/regress/config.toml` and stops asking. Manage this later with:
+
+```bash
+regress models                  # latest models, your default, and whether Regress asks
+regress models --set gpt-6-sol  # change the default
+regress models --ask            # ask before each run again (--no-ask to stop)
+regress models --all --refresh  # every model incl. dated snapshots, fetched fresh
+```
+
+Regress doesn't ask when `--model`, `--yes`, or `REGRESS_MODEL` is given, or when it isn't running in an interactive terminal (CI, pipes).
 
 ## How it works
 
@@ -120,15 +151,24 @@ Each run writes `.regress/runs/<timestamp>-<name>/`. The directory ignores itsel
 
 ## Configuration
 
-`regress.toml` in the project root (written by `regress init`). Flags override it, and so do the `REGRESS_MODEL` / `REGRESS_REASONING_EFFORT` environment variables.
+Settings are read in this order, with later sources winning:
+
+1. built-in defaults
+2. your user config (`~/.config/regress/config.toml`, written by `regress models`)
+3. the project's `regress.toml` (written by `regress init`)
+4. `REGRESS_MODEL` / `REGRESS_REASONING_EFFORT`
+5. command-line flags
+
+Both files accept the same keys:
 
 ```toml
-model = "gpt-5.5"
+# model = "gpt-5.5"   # in regress.toml this pins the model for everyone on the project
+ask_model = true      # ask which model to use before each run
 # reasoning_effort = "medium"
 rounds = 1
 max_repairs = 2
 max_mutants = 40
-runner = "auto"   # "bun", "npx" or "auto"
+runner = "auto"       # "bun", "npx" or "auto"
 ```
 
 ## Evaluation
@@ -177,6 +217,8 @@ Code map (`src/regress/`):
 | `vitest.py`, `stryker.py` | Tool adapters |
 | `validate.py` | Candidate checks |
 | `mutants.py`, `prompts.py`, `llm.py` | Mutant selection, prompts, OpenAI |
+| `catalog.py` | Available models: fetch, cache, filter |
+| `config.py` | Layered settings and the user config |
 | `ui.py` | Terminal output |
 | `store.py` | Run storage |
 | `evaluation.py` | Hidden-bug evaluation |
