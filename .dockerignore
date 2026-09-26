@@ -1,0 +1,16 @@
+.git
+**/.env
+.venv
+.pytest_cache
+.ruff_cache
+.claude
+.DS_Store
+**/node_modules
+**/.regress
+**/.stryker-tmp
+**/build
+**/dist
+examples/defu
+examples/es-toolkit
+examples/remeda
+examples/utils

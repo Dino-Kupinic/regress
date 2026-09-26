@@ -269,6 +269,8 @@ The oracle check needs no model. It confirms every hidden bug is detectable, and
 
 ## Development
 
+For a hosted demo, see [Coolify deployment](docs/coolify.md).
+
 ```bash
 uv sync
 uv run pytest                      # all tests (integration tests need `bun install` in examples/)
