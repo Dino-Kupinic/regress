@@ -1,0 +1,31 @@
+{
+  "source": "src/pagination.ts",
+  "test": "test/pagination.test.ts",
+  "oracle": "oracle/pagination.test.ts",
+  "bugs": [
+    {
+      "id": "pages-round-down",
+      "description": "The page count is rounded down, losing the last partial page.",
+      "find": "Math.ceil(totalItems / pageSize)",
+      "replace": "Math.floor(totalItems / pageSize)"
+    },
+    {
+      "id": "pages-one-based-offset",
+      "description": "The offset is one-based.",
+      "find": "offset: (current - 1) * pageSize,",
+      "replace": "offset: (current - 1) * pageSize + 1,"
+    },
+    {
+      "id": "pages-no-upper-clamp",
+      "description": "Pages beyond the last one are not clamped.",
+      "find": "Math.min(Math.max(1, Math.trunc(page)), totalPages)",
+      "replace": "Math.max(1, Math.trunc(page))"
+    },
+    {
+      "id": "window-no-readjust",
+      "description": "The window shrinks near the last page instead of shifting left.",
+      "find": "  start = Math.max(1, end - size + 1);\n",
+      "replace": ""
+    }
+  ]
+}

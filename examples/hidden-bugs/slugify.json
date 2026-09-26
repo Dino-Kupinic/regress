@@ -1,0 +1,37 @@
+{
+  "source": "src/slugify.ts",
+  "test": "test/slugify.test.ts",
+  "oracle": "oracle/slugify.test.ts",
+  "bugs": [
+    {
+      "id": "slug-keeps-diacritics",
+      "description": "Combining accents are no longer stripped after normalization.",
+      "find": "    .replace(/[\\u0300-\\u036f]/g, \"\")\n",
+      "replace": ""
+    },
+    {
+      "id": "slug-drops-ampersand",
+      "description": "Ampersands become a separator instead of 'and'.",
+      "find": ".replace(/&/g, \" and \")",
+      "replace": ".replace(/&/g, \" \")"
+    },
+    {
+      "id": "slug-trailing-separator",
+      "description": "Cutting at a word boundary keeps the trailing separator.",
+      "find": "cut.slice(0, lastSeparator)",
+      "replace": "cut.slice(0, lastSeparator + 1)"
+    },
+    {
+      "id": "truncate-no-room-for-ellipsis",
+      "description": "Truncation ignores the ellipsis length and overshoots max.",
+      "find": "const room = max - ellipsis.length;",
+      "replace": "const room = max;"
+    },
+    {
+      "id": "truncate-early-word-boundary",
+      "description": "Truncation cuts at any earlier space, even the very first one.",
+      "find": "lastSpace > room / 2",
+      "replace": "lastSpace > 0"
+    }
+  ]
+}

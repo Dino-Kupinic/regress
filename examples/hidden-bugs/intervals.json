@@ -1,0 +1,31 @@
+{
+  "source": "src/intervals.ts",
+  "test": "test/intervals.test.ts",
+  "oracle": "oracle/intervals.test.ts",
+  "bugs": [
+    {
+      "id": "intervals-shrink-container",
+      "description": "Merging a contained interval shrinks its container.",
+      "find": "last[1] = Math.max(last[1], end);",
+      "replace": "last[1] = end;"
+    },
+    {
+      "id": "intervals-sort-by-end",
+      "description": "Intervals are sorted by end instead of start.",
+      "find": "(x, y) => x[0] - y[0] || x[1] - y[1]",
+      "replace": "(x, y) => x[1] - y[1]"
+    },
+    {
+      "id": "intervals-merge-unnormalized",
+      "description": "merge no longer normalizes reversed intervals.",
+      "find": "intervals.map(normalize)",
+      "replace": "intervals.map((interval): Interval => [interval[0], interval[1]])"
+    },
+    {
+      "id": "intervals-gaps-unnormalized-window",
+      "description": "gaps no longer normalizes a reversed window.",
+      "find": "const [lo, hi] = normalize(within);",
+      "replace": "const [lo, hi] = within;"
+    }
+  ]
+}

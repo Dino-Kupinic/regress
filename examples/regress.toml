@@ -1,0 +1,3 @@
+# Regress configuration for the example corpus.
+rounds = 1
+max_repairs = 2

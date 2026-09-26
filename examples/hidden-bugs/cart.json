@@ -1,0 +1,37 @@
+{
+  "source": "src/cart.ts",
+  "test": "test/cart.test.ts",
+  "oracle": "oracle/cart.test.ts",
+  "bugs": [
+    {
+      "id": "cart-quantity-overwrite",
+      "description": "Adding an existing sku keeps the larger quantity instead of summing.",
+      "find": "(existing?.quantity ?? 0) + quantity",
+      "replace": "Math.max(existing?.quantity ?? 0, quantity)"
+    },
+    {
+      "id": "cart-shipping-before-discount",
+      "description": "Free shipping is decided on the subtotal before the discount.",
+      "find": "this.subtotal() - this.discount() >= FREE_SHIPPING_THRESHOLD",
+      "replace": "this.subtotal() >= FREE_SHIPPING_THRESHOLD"
+    },
+    {
+      "id": "cart-uncapped-fixed-coupon",
+      "description": "A fixed coupon can exceed the subtotal and make the total negative.",
+      "find": "round2(Math.min(raw, subtotal))",
+      "replace": "round2(raw)"
+    },
+    {
+      "id": "cart-percent-scale",
+      "description": "Percent coupons are scaled by 10 instead of 100.",
+      "find": "this.coupon.amount / 100",
+      "replace": "this.coupon.amount / 10"
+    },
+    {
+      "id": "cart-remove-sets-quantity",
+      "description": "Partial removal sets the quantity instead of subtracting.",
+      "find": "existing.quantity -= quantity;",
+      "replace": "existing.quantity = quantity;"
+    }
+  ]
+}

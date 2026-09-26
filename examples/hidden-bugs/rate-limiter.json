@@ -1,0 +1,31 @@
+{
+  "source": "src/rate-limiter.ts",
+  "test": "test/rate-limiter.test.ts",
+  "oracle": "oracle/rate-limiter.test.ts",
+  "bugs": [
+    {
+      "id": "bucket-uncapped-refill",
+      "description": "Refilling can exceed the bucket capacity.",
+      "find": "Math.min(this.capacity, this.tokens + elapsedSeconds * this.refillPerSecond)",
+      "replace": "this.tokens + elapsedSeconds * this.refillPerSecond"
+    },
+    {
+      "id": "bucket-wrong-time-unit",
+      "description": "Elapsed time is divided by 100 instead of 1000.",
+      "find": "(now - this.lastRefill) / 1000",
+      "replace": "(now - this.lastRefill) / 100"
+    },
+    {
+      "id": "bucket-stale-refill-time",
+      "description": "The refill timestamp is never advanced, so time is counted repeatedly.",
+      "find": "      this.lastRefill = now;\n",
+      "replace": ""
+    },
+    {
+      "id": "bucket-wait-rounds-down",
+      "description": "The wait time is rounded to nearest instead of up.",
+      "find": "return Math.ceil(((count - this.tokens)",
+      "replace": "return Math.round(((count - this.tokens)"
+    }
+  ]
+}
