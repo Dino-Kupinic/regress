@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import shutil
+import time
 from pathlib import Path
 
 import pytest
 
+from regress.errors import LLMError
 from regress.llm import Completion, TestFileProposal
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -33,6 +35,41 @@ class ScriptedLLM:
         if isinstance(item, str):
             item = TestFileProposal(summary="scripted", new_tests=[], equivalent_mutants=[], test_file=item)
         return Completion(item, input_tokens=100, output_tokens=50)
+
+
+class ScriptedFactory:
+    """Builds a ScriptedLLM in the worker process of a run started over HTTP (it must pickle)."""
+
+    def __init__(self, *responses: str) -> None:
+        self.responses = responses
+
+    def __call__(self, model: str, settings: object) -> ScriptedLLM:
+        return ScriptedLLM(*self.responses)
+
+
+class SlowLLM:
+    """A model that takes far too long, for cancelling runs mid-call."""
+
+    model = "slow"
+
+    def propose(self, instructions: str, prompt: str, on_status=None, on_warning=None) -> Completion:
+        time.sleep(60)
+        raise AssertionError("SlowLLM should have been cancelled")
+
+
+class FailingLLM:
+    model = "failing"
+
+    def propose(self, instructions: str, prompt: str, on_status=None, on_warning=None) -> Completion:
+        raise LLMError("The model is down.")
+
+
+def slow_llm(model: str, settings: object) -> SlowLLM:
+    return SlowLLM()
+
+
+def failing_llm(model: str, settings: object) -> FailingLLM:
+    return FailingLLM()
 
 
 def make_node_package(root: Path, name: str, version: str) -> None:
