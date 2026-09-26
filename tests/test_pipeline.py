@@ -41,6 +41,10 @@ ONE_SHOT = (
 )
 WRONG_EXPECTATION = ONE_SHOT.replace("expect(cart.discount()).toBe(8);", "expect(cart.discount()).toBe(10);")
 DROPS_BASELINE_TEST = ONE_SHOT.replace('it("rejects negative prices"', 'it("refuses negative prices"')
+# A forgotten `await` in an async test: the test passes, the assertion fails later as an unhandled rejection.
+UNAWAITED_ASSERTION = ONE_SHOT.replace(
+    'it("applies a percent coupon", () => {', 'it("applies a percent coupon", async () => {'
+).replace("expect(cart.discount()).toBe(8);", "expect(Promise.resolve(cart.discount())).resolves.toBe(10);")
 
 
 @pytest.fixture
@@ -84,6 +88,17 @@ def test_failing_candidate_is_repaired_with_the_error_fed_back(root):
 
     assert report.stage("generated").attempts == 2
     assert "Your previous attempt was rejected" in llm.prompts[1]
+    assert "expected 8 to be 10" in llm.prompts[1]
+    assert project.test_file.read_text() == ONE_SHOT
+
+
+def test_unhandled_errors_are_repaired_even_when_every_test_passes(root):
+    # Accepting this file would leave `vitest run` failing and crash Stryker's dry run.
+    llm = ScriptedLLM(UNAWAITED_ASSERTION, ONE_SHOT)
+    project, report = run(root, "src/cart.ts", llm, rounds=0)
+
+    assert report.stage("generated").attempts == 2
+    assert "unhandled promise rejection" in llm.prompts[1]
     assert "expected 8 to be 10" in llm.prompts[1]
     assert project.test_file.read_text() == ONE_SHOT
 
