@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import difflib
+import hashlib
 import json
+import math
 import os
 import re
 import time
@@ -14,10 +16,11 @@ from typing import Literal
 
 import openai
 
-from regress.config import user_cache_dir
+from regress.config import atomic_write_text, user_cache_dir
 
 CACHE_FILE = "models.json"
 CACHE_TTL_SECONDS = 24 * 60 * 60
+MAX_CACHE_BYTES = 5_000_000
 
 # Text models that can return structured output through the Responses API.
 _TEXT_MODEL = re.compile(r"^(?:ft:)?(?:gpt-|o\d)")
@@ -111,14 +114,16 @@ def sdk_models() -> list[ModelInfo]:
 
 def load_catalog(refresh: bool = False, client: openai.OpenAI | None = None) -> Catalog:
     """Models available to the API key: cached for a day, refreshed from the API, or the SDK's list."""
-    cached = _read_cache()
+    scope = _cache_scope(client)
+    cached = _read_cache(scope)
     if cached and not refresh and time.time() - (cached.fetched_at or 0) < CACHE_TTL_SECONDS:
         return cached
-    if client is None:
-        if not os.environ.get("OPENAI_API_KEY"):
-            return cached or Catalog(sdk_models(), "sdk", note="OPENAI_API_KEY is not set")
-        client = openai.OpenAI(timeout=15, max_retries=1)
+    owns_client = client is None
+    if owns_client and not os.environ.get("OPENAI_API_KEY", "").strip():
+        return cached or Catalog(sdk_models(), "sdk", note="OPENAI_API_KEY is not set")
     try:
+        if client is None:
+            client = openai.OpenAI(timeout=15, max_retries=1)
         catalog = fetch_catalog(client)
     except openai.OpenAIError as error:
         reason = f"could not reach the OpenAI API ({type(error).__name__})"
@@ -126,30 +131,84 @@ def load_catalog(refresh: bool = False, client: openai.OpenAI | None = None) -> 
             cached.note = reason
             return cached
         return Catalog(sdk_models(), "sdk", note=reason)
-    _write_cache(catalog)
+    finally:
+        if owns_client and client is not None:
+            client.close()
+    _write_cache(catalog, scope)
     return catalog
 
 
-def _read_cache() -> Catalog | None:
+def _cache_scope(client: openai.OpenAI | None) -> str:
+    """A cache from another credential, project, or endpoint cannot verify this user's models."""
+    values = (
+        getattr(client, "api_key", os.environ.get("OPENAI_API_KEY", "")),
+        str(getattr(client, "base_url", os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1"))).rstrip("/"),
+        getattr(client, "organization", os.environ.get("OPENAI_ORG_ID")),
+        getattr(client, "project", os.environ.get("OPENAI_PROJECT_ID")),
+    )
+    return hashlib.sha256(json.dumps(values).encode()).hexdigest()
+
+
+def _read_cache(scope: str) -> Catalog | None:
     path = user_cache_dir() / CACHE_FILE
     try:
-        data = json.loads(path.read_text())
-        models = [ModelInfo(**entry) for entry in data["models"]]
-        return Catalog(models, "cache", fetched_at=float(data["fetched_at"]), all_ids=frozenset(data["all_ids"]))
-    except (OSError, ValueError, KeyError, TypeError):
+        with path.open(encoding="utf-8") as handle:
+            raw = handle.read(MAX_CACHE_BYTES + 1)
+        if len(raw) > MAX_CACHE_BYTES:
+            return None
+        data = json.loads(raw)
+        if not isinstance(data, dict) or data.get("scope") != scope:
+            return None
+        fetched_at = data["fetched_at"]
+        if (
+            type(fetched_at) not in (int, float)
+            or not math.isfinite(fetched_at)
+            or not 0 <= fetched_at <= time.time() + 300
+        ):
+            return None
+        entries, all_ids = data["models"], data["all_ids"]
+        if (
+            not isinstance(entries, list)
+            or not isinstance(all_ids, list)
+            or not all(_valid_id(value) for value in all_ids)
+        ):
+            return None
+        models = []
+        for entry in entries:
+            if not isinstance(entry, dict) or not _valid_id(entry.get("id")):
+                return None
+            model = ModelInfo(**entry)
+            if model.created is not None and (type(model.created) is not int or not 0 <= model.created <= 253402300799):
+                return None
+            if model.shutdown_date is not None:
+                if not isinstance(model.shutdown_date, str):
+                    return None
+                date.fromisoformat(model.shutdown_date[:10])
+            models.append(model)
+        return Catalog(usable(models), "cache", fetched_at=fetched_at, all_ids=frozenset(all_ids))
+    except (OSError, ValueError, KeyError, TypeError, OverflowError, RecursionError):
         return None
 
 
-def _write_cache(catalog: Catalog) -> None:
+def _valid_id(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and bool(value)
+        and len(value) <= 256
+        and not any(char.isspace() or ord(char) < 32 for char in value)
+    )
+
+
+def _write_cache(catalog: Catalog, scope: str) -> None:
     path = user_cache_dir() / CACHE_FILE
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
+            "scope": scope,
             "fetched_at": catalog.fetched_at,
             "models": [asdict(m) for m in catalog.models],
             "all_ids": sorted(catalog.all_ids),
         }
-        path.write_text(json.dumps(payload))
+        atomic_write_text(path, json.dumps(payload))
     except OSError:
         pass  # the cache is an optimization; failing to write it is not an error
 

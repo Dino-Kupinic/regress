@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 
 from regress.errors import CandidateRejected, RegressError
+from regress.files import atomic_write_text
 from regress.llm import LLM, Completion
 from regress.models import RunReport, Stage, StageKind
 from regress.mutants import describe_mutant, select_mutants
@@ -75,9 +76,9 @@ class Pipeline:
             test_file_existed=self.workspace.original_tests is not None,
             model=self.llm.model,
         )
-        self.reporter.start(self.project, self.report)
         kept: Version | None = None
         try:
+            self.reporter.start(self.project, self.report)
             kept = self._run()
             self.report.status = "completed"
         except BaseException as error:
@@ -90,9 +91,21 @@ class Pipeline:
                 self.report.error = f"Unexpected {type(error).__name__}: {error}"
             raise
         finally:
-            self._finalize(kept)
-            self.report.duration_seconds = round(time.monotonic() - started, 1)
-            self.store.save(self.report, self.run_dir)
+            try:
+                self._finalize(kept)
+            except BaseException as error:
+                self.report.status = "failed"
+                self.report.error = f"Unable to finalize the workspace: {error}"
+                raise
+            finally:
+                self.report.duration_seconds = round(time.monotonic() - started, 1)
+                try:
+                    self.store.save(self.report, self.run_dir)
+                except BaseException:
+                    self.workspace.restore()
+                    self.report.kept_stage = None
+                    self.report.status = "failed"
+                    raise
         self.reporter.finish(self.report, self.run_dir)
         return self.report
 
@@ -141,9 +154,14 @@ class Pipeline:
         stage = Stage(kind="baseline", label="Existing tests")
         content = self.workspace.original_tests
         if content is not None:
-            with self.reporter.activity("Running existing tests"):
-                result = run_vitest(self.project, self.run_dir / "vitest", "baseline", self.options.vitest_timeout)
-            if result.total > 0 and not result.success:
+            try:
+                with self.reporter.activity("Running existing tests"):
+                    result = run_vitest(self.project, self.run_dir / "vitest", "baseline", self.options.vitest_timeout)
+            finally:
+                source_intact = self.workspace.source_intact()
+            if not source_intact:
+                raise RegressError("The existing tests changed the source file; it has been restored.")
+            if not result.success:
                 failing = [t.full_name for t in result.failed][:10] or (result.suite_errors + result.run_errors)[:1]
                 raise RegressError(
                     f"The existing tests in {self.project.test_rel} do not pass. Fix them first.\n"
@@ -214,9 +232,14 @@ class Pipeline:
     def _mutate(self, version: Version) -> None:
         self.workspace.write_tests(version.content)
         self._mutation_runs += 1
-        with self.reporter.activity(f"Running mutation testing on {self.project.source_rel}"):
-            run = run_stryker(self.project, self.run_dir / "stryker", self._mutation_runs, self.options.stryker_timeout)
-        if not self.workspace.source_intact():
+        try:
+            with self.reporter.activity(f"Running mutation testing on {self.project.source_rel}"):
+                run = run_stryker(
+                    self.project, self.run_dir / "stryker", self._mutation_runs, self.options.stryker_timeout
+                )
+        finally:
+            source_intact = self.workspace.source_intact()
+        if not source_intact:
             raise RegressError("The source file changed during mutation testing; it has been restored.")
         version.stage.mutation = run
         self.reporter.mutation(version.stage)
@@ -228,9 +251,12 @@ class Pipeline:
             )
 
     def _finalize(self, kept: Version | None) -> None:
-        if kept is None:
+        source_intact = self.workspace.source_intact()
+        if kept is None or not source_intact:
             self.workspace.restore()
             self.report.kept_stage = None
+            if kept is not None and not source_intact:
+                raise RegressError("The source file changed during the run; the original workspace has been restored.")
             return
         self.workspace.write_tests(kept.content)
         self.report.kept_stage = kept.stage.label
@@ -242,7 +268,7 @@ class Pipeline:
         directory.mkdir(exist_ok=True)
         index = len(list(directory.iterdir()))
         path = directory / f"{index}-{version.stage.kind}{_test_suffix(self.project.test_file)}"
-        path.write_text(version.content)
+        atomic_write_text(path, version.content)
         version.stage.test_file_snapshot = path.relative_to(self.run_dir).as_posix()
 
     def _log_llm(self, kind: str, attempt: int, prompt: str, completion: Completion) -> str:
@@ -250,12 +276,14 @@ class Pipeline:
         name = f"{self._llm_calls:02d}-{kind}-attempt{attempt}"
         directory = self.run_dir / "llm"
         directory.mkdir(exist_ok=True)
-        (directory / f"{name}.prompt.md").write_text(f"<!-- instructions -->\n{INSTRUCTIONS}\n<!-- input -->\n{prompt}")
+        atomic_write_text(
+            directory / f"{name}.prompt.md", f"<!-- instructions -->\n{INSTRUCTIONS}\n<!-- input -->\n{prompt}"
+        )
         payload = {
             **completion.proposal.model_dump(),
             "usage": {"input_tokens": completion.input_tokens, "output_tokens": completion.output_tokens},
         }
-        (directory / f"{name}.response.json").write_text(json.dumps(payload, indent=2))
+        atomic_write_text(directory / f"{name}.response.json", json.dumps(payload, indent=2))
         return name
 
 

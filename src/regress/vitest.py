@@ -32,10 +32,25 @@ def run_vitest(project: Project, output_dir: Path, name: str, timeout: float = 3
     result = run_command(args, cwd=project.root, timeout=timeout, log_path=output_dir / f"{name}.log")
     if not report_path.is_file():
         raise ToolError(f"Vitest did not produce a report (exit code {result.returncode}).", tail(result.output))
-    return parse_vitest_report(json.loads(report_path.read_text()), result.output, result.returncode)
+    try:
+        payload = json.loads(report_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise ToolError(f"Vitest produced an unreadable report: {error}", tail(result.output)) from error
+    return parse_vitest_report(payload, result.output, result.returncode)
 
 
 def parse_vitest_report(report: dict, output: str = "", returncode: int = 0) -> TestRunResult:
+    try:
+        if not isinstance(report, dict) or type(report.get("success")) is not bool:
+            raise ValueError("expected an object with a boolean success flag")
+        if not isinstance(report.get("testResults"), list):
+            raise ValueError("expected a testResults array")
+        return _parse_vitest_report(report, output, returncode)
+    except (AttributeError, KeyError, TypeError, ValueError) as error:
+        raise ToolError(f"Vitest produced an invalid report: {error}", tail(output)) from error
+
+
+def _parse_vitest_report(report: dict, output: str, returncode: int) -> TestRunResult:
     tests: list[TestCase] = []
     suite_errors: list[str] = []
     for suite in report.get("testResults", []):
@@ -53,7 +68,7 @@ def parse_vitest_report(report: dict, output: str = "", returncode: int = 0) -> 
             )
     failed = any(t.status == TestStatus.FAILED for t in tests)
     success = bool(report.get("success")) and returncode == 0 and not suite_errors and not failed
-    if not report.get("testResults") and not suite_errors:
+    if not tests and not suite_errors:
         suite_errors.append("Vitest found no test file to run. Check the `include` patterns in your Vitest config.")
         success = False
     run_errors = [] if success or suite_errors or failed else [_run_error(output, returncode)]

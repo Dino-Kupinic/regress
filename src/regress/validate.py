@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from regress.errors import ToolTimeout
+from regress.files import atomic_write_bytes, atomic_write_text
 from regress.models import TestRunResult
 from regress.project import Project, import_specifiers, mock_specifiers, refers_to
 from regress.vitest import run_vitest
@@ -20,7 +21,10 @@ class Workspace:
 
     def __init__(self, project: Project) -> None:
         self.project = project
-        self.original_tests = project.test_file.read_text() if project.test_file.is_file() else None
+        self._original_test_bytes = project.test_file.read_bytes() if project.test_file.is_file() else None
+        self.original_tests = (
+            self._original_test_bytes.decode("utf-8") if self._original_test_bytes is not None else None
+        )
         self._source = project.source.read_bytes()
 
     def write_tests(self, content: str | None) -> None:
@@ -28,17 +32,20 @@ class Workspace:
             self.project.test_file.unlink(missing_ok=True)
             return
         self.project.test_file.parent.mkdir(parents=True, exist_ok=True)
-        self.project.test_file.write_text(content)
+        atomic_write_text(self.project.test_file, content)
 
     def restore(self) -> None:
-        self.write_tests(self.original_tests)
+        if self._original_test_bytes is None:
+            self.project.test_file.unlink(missing_ok=True)
+        else:
+            atomic_write_bytes(self.project.test_file, self._original_test_bytes)
 
     def source_intact(self) -> bool:
         """True if the source is unchanged; otherwise puts the original back and returns False."""
         current = self.project.source.read_bytes() if self.project.source.is_file() else None
-        if current == self._source:
+        if current == self._source and not self.project.source.is_symlink():
             return True
-        self.project.source.write_bytes(self._source)
+        atomic_write_bytes(self.project.source, self._source)
         return False
 
 
@@ -96,7 +103,9 @@ def check_candidate(
     except ToolTimeout:
         # The candidate's fault, not the toolchain's: tell the model instead of ending the run.
         result = None
-    if not workspace.source_intact():
+    finally:
+        source_intact = workspace.source_intact()
+    if not source_intact:
         problems.append("Running the tests modified the source file. Tests must never write to project files.")
     if result is None:
         problems.append(_hang_problem(timeout, changed_only=bool(required_tests)))
@@ -112,6 +121,8 @@ def check_candidate(
             "unhandled promise rejection (always await `expect(...).resolves` and `expect(...).rejects`):\n"
             + _clip(error, 40)
         )
+    if not result.success and not problems:
+        problems.append("Vitest reported an unsuccessful test run.")
     if len(result.failed) > MAX_REPORTED_FAILURES:
         problems.append(f"...and {len(result.failed) - MAX_REPORTED_FAILURES} more failing tests.")
     missing = sorted(required_tests - result.names)

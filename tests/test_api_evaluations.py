@@ -14,17 +14,33 @@ from regress.api import evaluations as evaluation_api
 def test_evaluation_routes_read_suites_and_results(js_project: Path):
     suites = js_project / "hidden-bugs"
     suites.mkdir()
-    (suites / "math.json").write_text(json.dumps({
-        "source": "src/math.ts", "test": "test/math.test.ts", "oracle": "oracle/math.ts",
-        "bugs": [{"id": "wrong-sum", "description": "Uses subtraction", "find": "a + b", "replace": "a - b"}],
-    }))
+    (suites / "math.json").write_text(
+        json.dumps(
+            {
+                "source": "src/math.ts",
+                "test": "test/math.test.ts",
+                "oracle": "oracle/math.ts",
+                "bugs": [{"id": "wrong-sum", "description": "Uses subtraction", "find": "a + b", "replace": "a - b"}],
+            }
+        )
+    )
     saved = js_project / ".regress" / "eval" / "20260926-100000"
     saved.mkdir(parents=True)
-    (saved / "eval.json").write_text(json.dumps({
-        "created_at": "2026-09-26T10:00:00Z", "mode": "oracle", "modules": [{
-            "module": "math", "stages": [{"label": "Oracle", "score": 100, "caught": ["wrong-sum"]}],
-        }], "output_dir": str(saved),
-    }))
+    (saved / "eval.json").write_text(
+        json.dumps(
+            {
+                "created_at": "2026-09-26T10:00:00Z",
+                "mode": "oracle",
+                "modules": [
+                    {
+                        "module": "math",
+                        "stages": [{"label": "Oracle", "score": 100, "caught": ["wrong-sum"]}],
+                    }
+                ],
+                "output_dir": str(saved),
+            }
+        )
+    )
     with TestClient(create_app(js_project), base_url="http://127.0.0.1") as client:
         assert client.get("/api/evaluations/suites").json()[0]["name"] == "math"
         assert client.get("/api/evaluations").json()[0]["modules"][0]["stages"][0]["caught"] == ["wrong-sum"]
@@ -41,16 +57,22 @@ def test_evaluation_start_requires_suites(js_project: Path):
 def test_evaluation_start_launches_background_command(js_project: Path, monkeypatch):
     suites = js_project / "hidden-bugs"
     suites.mkdir()
-    (suites / "math.json").write_text(json.dumps({
-        "source": "src/math.ts", "test": "test/math.test.ts", "bugs": [],
-    }))
+    (suites / "math.json").write_text(
+        json.dumps(
+            {
+                "source": "src/math.ts",
+                "test": "test/math.test.ts",
+                "bugs": [],
+            }
+        )
+    )
     commands = []
 
     class Process:
         def poll(self):
             return None
 
-        def terminate(self):
+        def send_signal(self, signum):
             pass
 
         def wait(self, timeout=None):

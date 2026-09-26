@@ -24,6 +24,12 @@ class Health(BaseModel):
     project_root: str
 
 
+class Readiness(BaseModel):
+    status: Literal["ready", "unavailable"]
+    project: bool
+    storage: bool
+
+
 # --- project ---------------------------------------------------------------------------------
 
 
@@ -89,7 +95,7 @@ class SettingsInfo(BaseModel):
 
 SettingsUpdate = create_model(
     "SettingsUpdate",
-    __config__=ConfigDict(extra="forbid"),
+    __config__=ConfigDict(extra="forbid", strict=True),
     __doc__="Keys to change in your user config. Omitted keys stay as they are; null removes a key.",
     **{name: (field.annotation | None, None) for name, field in Settings.model_fields.items()},
 )
@@ -121,7 +127,7 @@ class ModelList(BaseModel):
 class RunRequest(BaseModel):
     """What `regress run` takes on the command line."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
 
     source: str = Field(description="Source file to test, relative to the project root, e.g. src/cart.ts.")
     test: str | None = Field(default=None, description="Test file to extend. Found automatically by default.")

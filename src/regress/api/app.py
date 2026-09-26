@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
+from uuid import uuid4
 
 import anyio.to_thread
 from fastapi import FastAPI, Request
@@ -26,6 +28,8 @@ from regress.project import find_project_root
 LOCAL_HOSTS = ("localhost", "127.0.0.1", "[::1]")  # as in a Host header
 DEV_ORIGINS = ("http://localhost:5173", "http://127.0.0.1:5173")  # Vite's dev server
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+MAX_REQUEST_BYTES = 1_048_576
+logger = logging.getLogger(__name__)
 
 
 def create_app(
@@ -42,13 +46,18 @@ def create_app(
     """
     project_root = find_project_root((root or Path.cwd()).expanduser().resolve())
     manager = RunManager(project_root, llm_factory)
-    evaluations = EvaluationManager(project_root)
+    evaluations = EvaluationManager(project_root, manager=manager)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        yield
-        await anyio.to_thread.run_sync(manager.shutdown)  # restores the test file of a run in progress
-        await anyio.to_thread.run_sync(evaluations.shutdown)
+        manager.startup()
+        try:
+            yield
+        finally:
+            try:
+                await anyio.to_thread.run_sync(evaluations.shutdown)
+            finally:
+                await anyio.to_thread.run_sync(manager.shutdown)
 
     app = FastAPI(
         title="Regress",
@@ -64,11 +73,71 @@ def create_app(
     app.state.evaluations = evaluations
     app.include_router(router)
     app.add_exception_handler(RegressError, _regress_error)
+    app.add_exception_handler(Exception, _unexpected_error)
+    app.add_middleware(RequestLimits)
     # The last one added runs first: check the Host header, answer CORS preflights, then refuse cross-site writes.
     app.add_middleware(SameOriginWrites, origins=origins)
     app.add_middleware(CORSMiddleware, allow_origins=list(origins), allow_methods=["*"], allow_headers=["*"])
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(hosts))
     return app
+
+
+class RequestLimits:
+    """Bound request bodies before JSON parsing and attach a server-generated diagnostic ID."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        request_id = uuid4().hex
+        scope.setdefault("state", {})["request_id"] = request_id
+
+        async def send_response(message):
+            if message["type"] == "http.response.start":
+                message.setdefault("headers", []).extend(
+                    [(b"x-request-id", request_id.encode()), (b"x-content-type-options", b"nosniff")]
+                )
+            await send(message)
+
+        async def reject(status: int, detail: str) -> None:
+            await JSONResponse({"detail": detail}, status_code=status)(scope, receive, send_response)
+
+        length = Headers(scope=scope).get("content-length")
+        if length is not None:
+            try:
+                size = int(length)
+                if size < 0:
+                    raise ValueError
+            except ValueError:
+                await reject(400, "Invalid Content-Length header.")
+                return
+            if size > MAX_REQUEST_BYTES:
+                await reject(413, "Request body exceeds the 1 MiB limit.")
+                return
+        body = bytearray()
+        while True:
+            message = await receive()
+            if message["type"] == "http.disconnect":
+                return
+            body.extend(message.get("body", b""))
+            if len(body) > MAX_REQUEST_BYTES:
+                await reject(413, "Request body exceeds the 1 MiB limit.")
+                return
+            if not message.get("more_body", False):
+                break
+        delivered = False
+
+        async def replay():
+            nonlocal delivered
+            if not delivered:
+                delivered = True
+                return {"type": "http.request", "body": bytes(body), "more_body": False}
+            return await receive()
+
+        await self.app(scope, replay, send_response)
 
 
 class SameOriginWrites:
@@ -103,6 +172,16 @@ async def _regress_error(request: Request, error: Exception) -> JSONResponse:
     status = 500 if isinstance(error, ToolError) else 503 if isinstance(error, LLMError) else 400
     output = error.output if isinstance(error, ToolError) and error.output else None
     return JSONResponse(ErrorBody(detail=str(error), output=output).model_dump(exclude_none=True), status_code=status)
+
+
+async def _unexpected_error(request: Request, error: Exception) -> JSONResponse:
+    request_id = getattr(request.state, "request_id", uuid4().hex)
+    logger.error("Unhandled API error (request_id=%s)", request_id, exc_info=error)
+    return JSONResponse(
+        {"detail": "An internal error occurred. Check the server log using the X-Request-ID header."},
+        status_code=500,
+        headers={"X-Request-ID": request_id, "X-Content-Type-Options": "nosniff"},
+    )
 
 
 def _operation_id(route: APIRoute) -> str:

@@ -24,6 +24,7 @@ from regress.api.schemas import (
 )
 from regress.models import MutantStatus, RunReport, Stage
 from regress.mutants import mutated_line, short_description
+from regress.project import SOURCE_EXTENSIONS
 
 EVENTS_FILE = "events.jsonl"
 MutantFilter = Literal["undetected", "detected", "all"]
@@ -56,11 +57,11 @@ def summarize(report: RunReport, active: bool = False) -> RunSummary:
 
 def load_events(run_dir: Path) -> list[RunEvent]:
     """The saved event log. Runs started from the CLI have none."""
-    path = run_dir / EVENTS_FILE
+    path = contained(run_dir, EVENTS_FILE)
     if not path.is_file():
         return []
     events = []
-    for line in path.read_text().splitlines():
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
         try:
             events.append(RunEvent.model_validate_json(line))
         except ValidationError:
@@ -192,14 +193,17 @@ def _snapshot(run_dir: Path, stage: Stage, required: bool = False) -> str:
 def _mutated_source(report: RunReport, run_dir: Path, index: int) -> list[str]:
     """The source as Stryker saw it, from its saved report; else the file as it is now."""
     try:
-        files = json.loads((run_dir / "stryker" / f"mutation-{index}.json").read_text())["files"]
+        files = json.loads(contained(run_dir, f"stryker/mutation-{index}.json").read_text())["files"]
         entry = files.get(report.source_file) or next(
             value for key, value in files.items() if Path(key).as_posix().endswith(report.source_file)
         )
         return entry["source"].splitlines(keepends=True)
-    except (OSError, ValueError, KeyError, StopIteration):
+    except (OSError, ValueError, KeyError, StopIteration, AttributeError, TypeError):
         pass
-    source = Path(report.project_root) / report.source_file
+    # Saved reports can move with their project. Never trust their original absolute path.
+    source = contained(run_dir.parents[2], report.source_file)
+    if source.suffix not in SOURCE_EXTENSIONS or any(p.startswith(".") for p in Path(report.source_file).parts):
+        return []
     return source.read_text().splitlines(keepends=True) if source.is_file() else []
 
 
@@ -207,18 +211,25 @@ def _mutated_source(report: RunReport, run_dir: Path, index: int) -> list[str]:
 
 
 def llm_calls(run_dir: Path) -> list[LLMCall]:
-    directory = run_dir / "llm"
+    directory = contained(run_dir, "llm")
     names = sorted(p.name.removesuffix(".response.json") for p in directory.glob("*.response.json"))
-    return [_llm_call(directory, name) for name in names if _LLM_CALL.fullmatch(name)]
+    calls = []
+    for name in names:
+        if _LLM_CALL.fullmatch(name):
+            try:
+                calls.append(_llm_call(directory, name))
+            except HTTPException:
+                continue  # a damaged artifact must not hide every other model call
+    return calls
 
 
 def llm_call(run_dir: Path, name: str) -> LLMCallDetail:
-    directory = run_dir / "llm"
+    directory = contained(run_dir, "llm")
     if not _LLM_CALL.fullmatch(name) or not (directory / f"{name}.response.json").is_file():
         raise HTTPException(404, f"No model call {name}.")
     call = _llm_call(directory, name)
-    prompt = directory / f"{name}.prompt.md"
-    response = json.loads((directory / f"{name}.response.json").read_text())
+    prompt = contained(directory, f"{name}.prompt.md")
+    response = _response(directory, name)
     return LLMCallDetail(
         **call.model_dump(),
         prompt=prompt.read_text() if prompt.is_file() else "",
@@ -229,18 +240,31 @@ def llm_call(run_dir: Path, name: str) -> LLMCallDetail:
 def _llm_call(directory: Path, name: str) -> LLMCall:
     match = _LLM_CALL.fullmatch(name)
     assert match is not None
-    response = json.loads((directory / f"{name}.response.json").read_text())
+    response = _response(directory, name)
     usage = response.get("usage", {})
-    return LLMCall(
-        name=name,
-        kind=match[2],
-        attempt=int(match[3]),
-        input_tokens=usage.get("input_tokens", 0),
-        output_tokens=usage.get("output_tokens", 0),
-        summary=response.get("summary", ""),
-        new_tests=response.get("new_tests", []),
-        equivalent_mutants=response.get("equivalent_mutants", []),
-    )
+    try:
+        return LLMCall(
+            name=name,
+            kind=match[2],
+            attempt=int(match[3]),
+            input_tokens=usage.get("input_tokens", 0),
+            output_tokens=usage.get("output_tokens", 0),
+            summary=response.get("summary", ""),
+            new_tests=response.get("new_tests", []),
+            equivalent_mutants=response.get("equivalent_mutants", []),
+        )
+    except (ValidationError, AttributeError, ValueError) as error:
+        raise HTTPException(404, f"Model call {name} is incomplete or invalid.") from error
+
+
+def _response(directory: Path, name: str) -> dict:
+    try:
+        data = json.loads(contained(directory, f"{name}.response.json").read_text())
+        if not isinstance(data, dict) or not isinstance(data.get("test_file", ""), str):
+            raise ValueError("Invalid response")
+        return data
+    except (OSError, ValueError) as error:
+        raise HTTPException(404, f"Model call {name} is incomplete or invalid.") from error
 
 
 # --- raw files -------------------------------------------------------------------------------
@@ -248,17 +272,28 @@ def _llm_call(directory: Path, name: str) -> LLMCall:
 
 def artifacts(run_dir: Path) -> list[Artifact]:
     found = []
-    for path in sorted(run_dir.rglob("*")):
-        relative = path.relative_to(run_dir)
-        if relative.parts[:2] == ("stryker", "tmp") or not path.is_file():
-            continue  # Stryker's sandbox copy of the project, while a mutation run is going
-        found.append(Artifact(path=relative.as_posix(), size=path.stat().st_size))
-    return found
+    for directory, dirs, files in run_dir.walk():
+        if directory == run_dir / "stryker" and "tmp" in dirs:
+            dirs.remove("tmp")  # do not traverse Stryker's potentially large sandbox
+        for name in files:
+            path = directory / name
+            if path.is_symlink() or not path.is_file():
+                continue
+            try:
+                found.append(Artifact(path=path.relative_to(run_dir).as_posix(), size=path.stat().st_size))
+            except FileNotFoundError:
+                continue  # an active run may remove temporary files while we list
+    return sorted(found, key=lambda artifact: artifact.path)
 
 
 def contained(base: Path, relative: str) -> Path:
     """`base / relative`, refusing paths that lead outside `base`."""
-    path = (base / relative).resolve()
+    try:
+        if Path(relative).is_absolute():
+            raise ValueError("Expected a relative path")
+        path = (base / relative).resolve()
+    except (OSError, ValueError, RuntimeError) as error:
+        raise HTTPException(404, f"No file {relative}.") from error
     if not path.is_relative_to(base.resolve()):
         raise HTTPException(404, f"No file {relative}.")
     return path

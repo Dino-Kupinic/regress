@@ -22,6 +22,7 @@ from regress.config import (
 )
 from regress.errors import ProjectError, RegressError, ToolError
 from regress.evaluation import COUNTING_NOTE, EvalResult, evaluate_oracles, evaluate_regress, load_suites
+from regress.files import atomic_write_text
 from regress.llm import OpenAILLM, require_api_key
 from regress.pipeline import Pipeline, RunOptions
 from regress.process import run_command
@@ -143,7 +144,6 @@ def run(
         settings = load_settings(root, rounds=rounds, model=model, runner=runner)
         project = load_project(source, test, settings.runner)
         require_api_key()
-        llm = OpenAILLM(_pick_model(settings, yes), settings.reasoning_effort, idle_timeout=settings.llm_timeout)
         options = RunOptions(
             rounds=settings.rounds,
             max_repairs=settings.max_repairs,
@@ -153,7 +153,14 @@ def run(
             vitest_timeout=settings.vitest_timeout,
             stryker_timeout=settings.stryker_timeout,
         )
-        Pipeline(project, llm, options, ConsoleReporter(console, verbose)).run()
+        with OpenAILLM(
+            _pick_model(settings, yes),
+            settings.reasoning_effort,
+            idle_timeout=settings.llm_timeout,
+            max_duration=settings.llm_max_duration,
+            max_output_tokens=settings.llm_max_output_tokens,
+        ) as llm:
+            Pipeline(project, llm, options, ConsoleReporter(console, verbose)).run()
     except RegressError as error:
         _fail(error)
     except KeyboardInterrupt:
@@ -220,7 +227,7 @@ def init(
         regress_dir(root)
         config = root / CONFIG_FILE
         if not config.exists():
-            config.write_text(CONFIG_TEMPLATE)
+            atomic_write_text(config, CONFIG_TEMPLATE)
             console.print(f"[green]✓[/] Wrote {CONFIG_FILE}")
         console.print("[green]✓[/] Created .regress/ for run artifacts (git-ignored)")
         if not os.environ.get("OPENAI_API_KEY"):
@@ -273,7 +280,10 @@ def serve(
     host: Annotated[
         str, typer.Option(help="Address to listen on. The API has no authentication, so keep it local.")
     ] = "127.0.0.1",
-    port: Annotated[int, typer.Option(help="Port to listen on.")] = 8765,
+    port: Annotated[int, typer.Option(min=1, max=65535, help="Port to listen on.")] = 8765,
+    allow_remote: Annotated[
+        bool, typer.Option(help="Allow binding the unauthenticated API beyond loopback. Requires a trusted network.")
+    ] = False,
     origins: Annotated[
         list[str] | None,
         typer.Option(
@@ -288,6 +298,8 @@ def serve(
     from regress.api import DEV_ORIGINS, LOCAL_HOSTS, create_app
 
     url_host = f"[{host}]" if ":" in host else host  # an IPv6 address
+    if url_host not in LOCAL_HOSTS and not allow_remote:
+        _fail(ProjectError("Remote binding requires --allow-remote. For hosting, use the authenticated Nginx proxy."))
     try:
         root = find_project_root(path.expanduser().resolve())
         api = create_app(root, origins=origins or DEV_ORIGINS, hosts=[*LOCAL_HOSTS, url_host])
@@ -303,7 +315,7 @@ def serve(
             "[yellow]! The API has no authentication: anyone who can reach it can read your code "
             "and spend your OpenAI credits.[/]\n"
         )
-    uvicorn.run(api, host=host, port=port, timeout_graceful_shutdown=3)
+    uvicorn.run(api, host=host, port=port, workers=1, timeout_graceful_shutdown=15, server_header=False)
 
 
 @app.command("eval")
@@ -349,7 +361,13 @@ def eval_command(
             result = evaluate_regress(
                 examples,
                 suites,
-                lambda: OpenAILLM(chosen, settings.reasoning_effort, idle_timeout=settings.llm_timeout),
+                lambda: OpenAILLM(
+                    chosen,
+                    settings.reasoning_effort,
+                    idle_timeout=settings.llm_timeout,
+                    max_duration=settings.llm_max_duration,
+                    max_output_tokens=settings.llm_max_output_tokens,
+                ),
                 options,
                 ConsoleReporter(console, verbose),
                 settings.runner,

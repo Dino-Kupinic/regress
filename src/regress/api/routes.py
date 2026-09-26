@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from tempfile import TemporaryFile
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
@@ -26,6 +27,7 @@ from regress.api.schemas import (
     ModelEntry,
     ModelList,
     ProjectInfo,
+    Readiness,
     RunDetail,
     RunEvent,
     RunRequest,
@@ -96,6 +98,26 @@ Run = Annotated[RunHandle, Depends(_run)]
 @router.get("/health", tags=["meta"])
 def health(manager: Manager) -> Health:
     return Health(version=__version__, project_root=str(manager.root))
+
+
+@router.get("/ready", tags=["meta"], responses={503: {"model": Readiness}})
+def readiness(manager: Manager, response: Response) -> Readiness:
+    """Readiness for a new job: local configuration, installed tools, credentials and writable storage.
+
+    Does not contact OpenAI or disclose project paths or configuration values.
+    A busy worker remains ready; concurrent job submissions receive 409.
+    """
+    project_ready = projects.project_info(manager).ready
+    storage_ready = True
+    try:
+        with TemporaryFile(dir=manager.root / ".regress") as probe:
+            probe.write(b"ready")
+            probe.flush()
+    except OSError:
+        storage_ready = False
+    ready = project_ready and storage_ready
+    response.status_code = 200 if ready else 503
+    return Readiness(status="ready" if ready else "unavailable", project=project_ready, storage=storage_ready)
 
 
 # --- project ---------------------------------------------------------------------------------
@@ -269,12 +291,13 @@ async def stream_run_events(
 
     A finished run replays its log and ends straight away.
     """
-    if last_event_id and last_event_id.isdigit():
+    if last_event_id and last_event_id.isascii() and last_event_id.isdigit() and len(last_event_id) <= 20:
         after = int(last_event_id)
     job = run.job
     if job is None:
-        for event in results.load_events(run.run_dir)[after:]:
-            yield _event(event)
+        for event in results.load_events(run.run_dir):
+            if event.seq > after:
+                yield _event(event)
         yield ServerSentEvent(event="end", data=results.summarize(run.report))
         return
     version = -1
@@ -282,7 +305,7 @@ async def stream_run_events(
         events, live, current, done = job.since(after)
         for event in events:
             yield _event(event)
-        after += len(events)
+            after = event.seq
         if done:
             yield ServerSentEvent(event="end", data=job.summary())
             return
@@ -356,7 +379,7 @@ def _detail(run: RunHandle) -> RunDetail:
         done = job.done.is_set()
         return RunDetail(
             summary=results.summarize(job.report, active=not done),
-            report=job.report,
+            report=job.report.model_copy(deep=True),
             live=None if done else job.live(),
         )
 

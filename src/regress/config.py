@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
+import threading
 import tomllib
 from pathlib import Path
 from typing import Literal
@@ -23,26 +25,32 @@ max_repairs = 2       # retries when a generated test file fails validation
 max_mutants = 40      # undetected mutants sent to the model per round
 runner = "auto"       # how to run Vitest and Stryker: "bun", "npx", or "auto"
 # llm_timeout = 120   # seconds without any data from the model before Regress retries (up to 3 attempts)
+# llm_max_duration = 1800  # total seconds allowed for one proposal, including retries
+# llm_max_output_tokens = 32768  # output budget, including model reasoning
 """
 
 USER_CONFIG_HEADER = "# Your personal Regress defaults. Manage them with `regress models`.\n"
 
 ModelSource = Literal["built-in default", "user config", "regress.toml", "REGRESS_MODEL", "--model"]
+ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+_USER_CONFIG_LOCK = threading.RLock()
 
 
 class Settings(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True, str_strip_whitespace=True, validate_assignment=True)
 
-    model: str = DEFAULT_MODEL
+    model: str = Field(default=DEFAULT_MODEL, min_length=1, max_length=256, pattern=r"^[^\s\x00-\x1f\x7f]+$")
     ask_model: bool = True
-    reasoning_effort: str | None = None
+    reasoning_effort: ReasoningEffort | None = None
     rounds: int = Field(default=1, ge=0, le=5)
     max_repairs: int = Field(default=2, ge=0, le=5)
     max_mutants: int = Field(default=40, ge=1, le=200)
     runner: Literal["auto", "bun", "npx"] = "auto"
     llm_timeout: int = Field(default=120, ge=30, le=3600)
-    vitest_timeout: int = Field(default=300, ge=10)
-    stryker_timeout: int = Field(default=1800, ge=30)
+    llm_max_duration: int = Field(default=1800, ge=30, le=14400)
+    llm_max_output_tokens: int = Field(default=32768, ge=1024, le=131072)
+    vitest_timeout: int = Field(default=300, ge=10, le=14400)
+    stryker_timeout: int = Field(default=1800, ge=30, le=86400)
 
     _model_source: ModelSource = PrivateAttr(default="built-in default")
 
@@ -104,20 +112,41 @@ def user_settings() -> dict[str, object]:
 def save_user_settings(**values: object) -> Path:
     """Update keys in the user config, keeping the ones already there. A value of None removes the key."""
     path = user_config_path()
-    data = {key: value for key, value in {**_read_toml(path), **values}.items() if value is not None}
-    _validate(data, str(path))
-    path.parent.mkdir(parents=True, exist_ok=True)
-    lines = [f"{key} = {_toml_value(value)}\n" for key, value in data.items()]
-    path.write_text(USER_CONFIG_HEADER + "".join(lines))
+    with _USER_CONFIG_LOCK:
+        data = {key: value for key, value in {**_read_toml(path), **values}.items() if value is not None}
+        validated = _validate(data, str(path))
+        lines = [f"{key} = {_toml_value(getattr(validated, key))}\n" for key in data]
+        try:
+            atomic_write_text(path, USER_CONFIG_HEADER + "".join(lines))
+        except OSError as error:
+            raise ProjectError(f"Could not save configuration to {path}: {error}") from error
     return path
 
 
-def _read_toml(path: Path) -> dict[str, object]:
-    if not path.is_file():
-        return {}
+def atomic_write_text(path: Path, content: str) -> None:
+    """Replace a UTF-8 file only after the complete new contents have reached disk."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary: Path | None = None
     try:
-        return tomllib.loads(path.read_text())
-    except tomllib.TOMLDecodeError as error:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", delete=False
+        ) as handle:
+            temporary = Path(handle.name)
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+def _read_toml(path: Path) -> dict[str, object]:
+    try:
+        return tomllib.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except (OSError, UnicodeError, tomllib.TOMLDecodeError) as error:
         raise ProjectError(f"Invalid {path}: {error}") from error
 
 
@@ -134,4 +163,4 @@ def _toml_value(value: object) -> str:
         return "true" if value else "false"
     if isinstance(value, int | float):
         return str(value)
-    return json.dumps(str(value))  # a JSON string is a valid TOML basic string
+    return json.dumps(str(value), ensure_ascii=False)  # preserve Unicode instead of JSON surrogate escapes

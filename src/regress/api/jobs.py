@@ -8,7 +8,10 @@ for polling and streaming, and in the run's events.jsonl for later.
 
 from __future__ import annotations
 
+import base64
 import contextlib
+import fcntl
+import json
 import logging
 import multiprocessing
 import os
@@ -21,6 +24,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
+from multiprocessing import reduction
 from multiprocessing.connection import Connection
 from multiprocessing.context import SpawnContext
 from pathlib import Path
@@ -32,11 +36,13 @@ from regress.api.results import EVENTS_FILE, contained, load_events, summarize
 from regress.api.schemas import EventType, LiveState, RunEvent, RunRequest, RunSummary
 from regress.config import Settings, load_settings
 from regress.errors import CandidateRejected, ProjectError, RegressError, ToolError
+from regress.files import atomic_write_bytes, atomic_write_text
 from regress.llm import LLM, OpenAILLM, require_api_key
 from regress.models import RunReport, Stage
 from regress.pipeline import Pipeline, RunOptions
+from regress.process import retain_worker_resources
 from regress.project import Project, find_project_root, load_project
-from regress.store import REPORT_FILE, RunStore
+from regress.store import REPORT_FILE, RunStore, regress_dir
 from regress.ui import Reporter, format_delta, format_score
 
 log = logging.getLogger("regress.api")
@@ -44,13 +50,63 @@ log = logging.getLogger("regress.api")
 CANCEL_GRACE_SECONDS = 15.0  # then the run is killed, and the server restores the test file itself
 STATUS_INTERVAL = 0.25  # at most this often, the model's streaming status is passed on
 WATCHDOG_INTERVAL = 2.0
+RECOVERY_FILE = ".api-recovery.json"
 _RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 
 LLMFactory = Callable[[str, Settings], LLM]
 
 
+class _InheritedLock:
+    """Pass the server's flock into a spawned worker, so recovery cannot race an orphan."""
+
+    def __init__(self, descriptor: int) -> None:
+        self.descriptor = descriptor
+
+    def __reduce__(self):
+        return _restore_lock, (reduction.DupFd(self.descriptor),)
+
+
+def _restore_lock(descriptor: Any) -> _InheritedLock:
+    return _InheritedLock(descriptor.detach())
+
+
+def _durable_unlink(path: Path) -> None:
+    """Persist removal before a later run may make the old rollback data obsolete."""
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return
+    descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _rollback_path(root: Path, relative: str) -> Path:
+    """Keep lexical file names so atomic replacement removes an unexpected final symlink."""
+    part = Path(relative)
+    path = root / part
+    if (
+        part.is_absolute()
+        or ".." in part.parts
+        or "\0" in relative
+        or path.suffix not in {".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"}
+    ):
+        raise ProjectError(f"Cannot restore {relative!r}: invalid path or outside the project.")
+    if path.parent.resolve() != path.parent or not path.parent.is_relative_to(root):
+        raise ProjectError(f"Cannot restore {relative!r}: its parent directory moved or became a symlink.")
+    return path
+
+
 def openai_llm(model: str, settings: Settings) -> LLM:
-    return OpenAILLM(model, settings.reasoning_effort, idle_timeout=settings.llm_timeout)
+    return OpenAILLM(
+        model,
+        settings.reasoning_effort,
+        idle_timeout=settings.llm_timeout,
+        max_duration=settings.llm_max_duration,
+        max_output_tokens=settings.llm_max_output_tokens,
+    )
 
 
 @dataclass
@@ -63,6 +119,7 @@ class RunSpec:
     settings: Settings
     options: RunOptions
     llm_factory: LLMFactory
+    project_lock: _InheritedLock | None = None
 
 
 @dataclass
@@ -78,10 +135,12 @@ class RunHandle:
 
 
 def run_worker(spec: RunSpec, conn: Connection, server_pid: int) -> None:
+    retain_worker_resources(conn.fileno(), *([spec.project_lock.descriptor] if spec.project_lock is not None else []))
     signal.signal(signal.SIGINT, _interrupt)
     signal.signal(signal.SIGTERM, _interrupt)
     threading.Thread(target=_watch_server, args=(server_pid,), daemon=True).start()
     reporter = PipeReporter(conn)
+    llm = None
     try:
         llm = spec.llm_factory(spec.model, spec.settings)
         Pipeline(spec.project, llm, spec.options, reporter).run(spec.run_dir)
@@ -94,7 +153,14 @@ def run_worker(spec: RunSpec, conn: Connection, server_pid: int) -> None:
     except Exception as error:
         reporter.event("error", f"Unexpected {type(error).__name__}: {error}")
     finally:
-        conn.close()
+        try:
+            close = getattr(llm, "close", None)
+            if callable(close):
+                close()
+        finally:
+            conn.close()
+            if spec.project_lock is not None:
+                os.close(spec.project_lock.descriptor)
 
 
 def _interrupt(signum: int, frame: object) -> None:
@@ -109,6 +175,8 @@ def _watch_server(server_pid: int) -> None:
     while os.getppid() == server_pid:
         time.sleep(WATCHDOG_INTERVAL)
     os.kill(os.getpid(), signal.SIGINT)
+    time.sleep(CANCEL_GRACE_SECONDS)
+    os.kill(os.getpid(), signal.SIGKILL)
 
 
 class PipeReporter(Reporter):
@@ -244,6 +312,7 @@ class Job:
         self.activity_status: str | None = None
         self.activity_started_at: datetime | None = None
         self.cancel_requested = False
+        self.cleanup_failed = False
         self.version = 0  # bumped on every change, so a stream knows when to send
         self.done = threading.Event()
         self.lock = threading.Lock()
@@ -251,16 +320,39 @@ class Job:
         self._on_exit = on_exit
         self._started = time.monotonic()
         self._error: str | None = None
-        self._original_tests = project.test_file.read_text() if project.test_file.is_file() else None
+        self._original_tests = project.test_file.read_bytes() if project.test_file.is_file() else None
+        self._original_source = project.source.read_bytes()
+        self._cancel_timer: threading.Timer | None = None
+
+    def prepare(self) -> None:
+        """Persist rollback data before a worker is allowed to modify project files."""
+        journal = {
+            "version": 1,
+            "report": self.report.model_dump(mode="json"),
+            "source": base64.b64encode(self._original_source).decode("ascii"),
+            "tests": base64.b64encode(self._original_tests).decode("ascii")
+            if self._original_tests is not None
+            else None,
+        }
+        atomic_write_text(self.run_dir / RECOVERY_FILE, json.dumps(journal))
+        atomic_write_text(self.run_dir / REPORT_FILE, self.report.model_dump_json(indent=2))
 
     def start(self, context: SpawnContext) -> None:
         reader, writer = context.Pipe(duplex=False)
         self.process = context.Process(
             target=run_worker, args=(self._spec, writer, os.getpid()), name=f"regress-run-{self.id}"
         )
-        self.process.start()
-        writer.close()  # so the reader sees EOF once the worker exits
-        threading.Thread(target=self._pump, args=(reader,), name=f"regress-pump-{self.id}", daemon=True).start()
+        try:
+            self.process.start()
+            writer.close()  # so the reader sees EOF once the worker exits
+            threading.Thread(target=self._pump, args=(reader,), name=f"regress-pump-{self.id}", daemon=True).start()
+        except BaseException:
+            reader.close()
+            writer.close()
+            if self.process.pid is not None:
+                self.process.kill()
+                self.process.join(timeout=5)
+            raise
 
     def cancel(self) -> bool:
         with self.lock:
@@ -269,9 +361,9 @@ class Job:
             self.cancel_requested = True
             self._add_event("cancelling", "Cancelling...")
         self._signal(signal.SIGINT)
-        timer = threading.Timer(CANCEL_GRACE_SECONDS, self._signal, args=(signal.SIGKILL,))
-        timer.daemon = True
-        timer.start()
+        self._cancel_timer = threading.Timer(CANCEL_GRACE_SECONDS, self._signal, args=(signal.SIGKILL,))
+        self._cancel_timer.daemon = True
+        self._cancel_timer.start()
         return True
 
     def live(self) -> LiveState:
@@ -292,10 +384,11 @@ class Job:
             return self.events[seq:], None if done else self.live(), self.version, done
 
     def summary(self) -> RunSummary:
-        return summarize(self.report, active=not self.done.is_set())
+        with self.lock:
+            return summarize(self.report, active=not self.done.is_set())
 
     def _signal(self, signum: int) -> None:
-        if not self.done.is_set() and self.process.pid is not None:
+        if not self.done.is_set() and self.process.pid is not None and self.process.is_alive():
             with contextlib.suppress(ProcessLookupError):
                 os.kill(self.process.pid, signum)
 
@@ -312,7 +405,10 @@ class Job:
                     log.exception("Ignoring a malformed message from run %s", self.id)
         finally:
             conn.close()
-            self.process.join()
+            self.process.join(timeout=CANCEL_GRACE_SECONDS)
+            if self.process.is_alive():
+                self.process.kill()
+                self.process.join(timeout=5)
             self._finish()
 
     def _handle(self, message: tuple[Any, ...]) -> None:
@@ -344,31 +440,47 @@ class Job:
             data=data or {},
         )
         self.events.append(event)
-        with (self.run_dir / EVENTS_FILE).open("a") as file:
-            file.write(event.model_dump_json() + "\n")
+        try:
+            with (self.run_dir / EVENTS_FILE).open("a") as file:
+                file.write(event.model_dump_json() + "\n")
+        except OSError:
+            log.exception("Could not persist progress for run %s", self.id)
         self.version += 1
         return event
 
     def _finish(self) -> None:
-        with self.lock:
-            try:
-                self.report = RunReport.model_validate_json((self.run_dir / REPORT_FILE).read_text())
-            except (OSError, ValueError):
-                self._salvage()
-            self.activity = self.activity_status = self.activity_started_at = None
-            self.version += 1
-        self.done.set()
-        self._on_exit(self)
+        try:
+            with self.lock:
+                try:
+                    saved = RunReport.model_validate_json((self.run_dir / REPORT_FILE).read_text())
+                    if saved.status == "running" or (saved.status == "completed" and self._error is not None):
+                        self._salvage()
+                    else:
+                        self.report = saved
+                        if saved.status != "completed":
+                            self._restore_originals()
+                except (OSError, ValueError):
+                    self._salvage()
+                _durable_unlink(self.run_dir / RECOVERY_FILE)
+        except Exception as error:
+            self.cleanup_failed = True
+            log.exception("Could not finish cleanup for run %s", self.id)
+            with self.lock:
+                self.report.status = "failed"
+                self.report.error = f"Run cleanup failed: {error}"
+                self._add_event("error", self.report.error)
+        finally:
+            with self.lock:
+                self.activity = self.activity_status = self.activity_started_at = None
+                self.version += 1
+            if self._cancel_timer is not None:
+                self._cancel_timer.cancel()
+            self._on_exit(self)
+            self.done.set()
 
     def _salvage(self) -> None:
         """The worker exited without saving a report (killed, or cancelled while starting): clean up for it."""
-        test_file = self._spec.project.test_file
-        current = test_file.read_text() if test_file.is_file() else None
-        if current != self._original_tests:
-            if self._original_tests is None:
-                test_file.unlink()
-            else:
-                test_file.write_text(self._original_tests)
+        self._restore_originals()
         report = self.report.model_copy(deep=True)
         if self.cancel_requested:
             report.status, report.error = "cancelled", "Interrupted"
@@ -376,12 +488,29 @@ class Job:
                 self._add_event("cancelled", "Cancelled. The test file was restored.")
         else:
             report.status = "failed"
-            report.error = self._error or f"The run stopped unexpectedly (exit code {self.process.exitcode})."
+            process = getattr(self, "process", None)
+            report.error = (
+                self._error or f"The run stopped unexpectedly (exit code {getattr(process, 'exitcode', None)})."
+            )
             if self._error is None:
                 self._add_event("error", report.error)
+        report.kept_stage = None
         report.duration_seconds = round(time.monotonic() - self._started, 1)
-        (self.run_dir / REPORT_FILE).write_text(report.model_dump_json(indent=2))
         self.report = report
+        atomic_write_text(self.run_dir / REPORT_FILE, report.model_dump_json(indent=2))
+
+    def _restore_originals(self) -> None:
+        project = self._spec.project
+        source = _rollback_path(project.root, project.source_rel)
+        test_file = _rollback_path(project.root, project.test_rel)
+        current = test_file.read_bytes() if not test_file.is_symlink() and test_file.is_file() else None
+        if test_file.is_symlink() or current != self._original_tests:
+            if self._original_tests is None:
+                _durable_unlink(test_file)
+            else:
+                atomic_write_bytes(test_file, self._original_tests)
+        if source.is_symlink() or not source.is_file() or source.read_bytes() != self._original_source:
+            atomic_write_bytes(source, self._original_source)
 
 
 class RunManager:
@@ -396,13 +525,130 @@ class RunManager:
         self._lock = threading.Lock()
         self._jobs: dict[str, Job] = {}
         self._busy: str | None = None
+        self._reservation: object | None = None
+        self._closed = False
+        self._problem: str | None = None
+        self._project_lock: int | None = None
         self._summaries: dict[str, tuple[int, RunSummary]] = {}
+
+    def startup(self) -> None:
+        """Claim this project for one API process, including across Uvicorn workers."""
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("The run manager has already shut down.")
+            self._claim_project()
+
+    def _claim_project(self) -> None:
+        if self._project_lock is not None:
+            return
+        path = regress_dir(self.root) / "api.lock"
+        descriptor = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            os.close(descriptor)
+            raise RuntimeError(
+                f"Another Regress API server already owns {self.root}. Run one server with one worker per project."
+            ) from error
+        except BaseException:
+            os.close(descriptor)
+            raise
+        self._project_lock = descriptor
+        try:
+            self._recover()
+        except BaseException:
+            os.close(descriptor)
+            self._project_lock = None
+            raise
+
+    @property
+    def lock_descriptor(self) -> int:
+        """Descriptor for background children to hold until they exit."""
+        assert self._project_lock is not None
+        return self._project_lock
+
+    @property
+    def blocking_problem(self) -> str | None:
+        with self._lock:
+            return self._problem
+
+    def _recover(self) -> None:
+        """Restore unfinished API-owned runs after every process from the old server has exited."""
+        if self.store.base.is_symlink() or not self.store.base.resolve().is_relative_to(self.root):
+            raise ProjectError("The run directory must stay inside the project and must not be a symlink.")
+        if not self.store.base.is_dir():
+            return
+        for run_dir in sorted(self.store.base.iterdir()):
+            if run_dir.is_symlink() or not run_dir.is_dir():
+                continue
+            journal_path = run_dir / RECOVERY_FILE
+            if journal_path.is_symlink():
+                raise ProjectError(f"Cannot recover run {run_dir.name}: its recovery record is a symlink.")
+            if not journal_path.is_file():
+                continue
+            report_path = run_dir / REPORT_FILE
+            if report_path.is_symlink():
+                raise ProjectError(f"Cannot recover run {run_dir.name}: its report is a symlink.")
+            try:
+                saved = RunReport.model_validate_json(report_path.read_text())
+            except (OSError, ValueError):
+                saved = None
+            if (
+                saved is not None
+                and saved.status == "completed"
+                and saved.id == run_dir.name
+                and Path(saved.project_root).resolve() == self.root
+            ):
+                _durable_unlink(journal_path)
+                continue
+            try:
+                journal = json.loads(journal_path.read_text())
+                if journal["version"] != 1:
+                    raise ValueError("unsupported recovery format")
+                report = RunReport.model_validate(journal["report"])
+                if report.id != run_dir.name or Path(report.project_root).resolve() != self.root:
+                    raise ValueError("the recovery record belongs to another run or project")
+                source = _rollback_path(self.root, report.source_file)
+                test_file = _rollback_path(self.root, report.test_file)
+                if source == test_file:
+                    raise ValueError("source and test paths are identical")
+                original_source = base64.b64decode(journal["source"], validate=True)
+                original_tests = None if journal["tests"] is None else base64.b64decode(journal["tests"], validate=True)
+            except (KeyError, OSError, TypeError, ValueError) as error:
+                raise ProjectError(f"Cannot safely recover run {run_dir.name}: {error}") from error
+            atomic_write_bytes(source, original_source)
+            if original_tests is None:
+                _durable_unlink(test_file)
+            else:
+                atomic_write_bytes(test_file, original_tests)
+            if saved is not None and saved.id == report.id and saved.status in {"failed", "cancelled"}:
+                report = saved
+            else:
+                report.status = "failed"
+                report.error = (
+                    "The API server stopped before this run finished. Original source and tests were restored."
+                )
+                report.duration_seconds = max(
+                    0.0, (datetime.now().astimezone() - report.created_at.astimezone()).total_seconds()
+                )
+            report.kept_stage = None
+            atomic_write_text(report_path, report.model_dump_json(indent=2))
+            _durable_unlink(journal_path)
+            log.warning("Recovered interrupted API run %s", run_dir.name)
 
     def active(self) -> Job | None:
         with self._lock:
-            return next(iter(self._jobs.values()), None)
+            return next((job for job in self._jobs.values() if not job.done.is_set()), None)
 
     def start(self, request: RunRequest) -> Job:
+        release = self.reserve("starting a run")
+        try:
+            return self._start(request, release)
+        except BaseException:
+            release()
+            raise
+
+    def _start(self, request: RunRequest, release: Callable[[], None]) -> Job:
         settings = load_settings(self.root, rounds=request.rounds, model=request.model, runner=request.runner)
         source = self.project_path(request.source)
         project = load_project(source, self.project_path(request.test) if request.test else None, settings.runner)
@@ -425,11 +671,35 @@ class RunManager:
             stryker_timeout=settings.stryker_timeout,
         )
         with self._lock:
-            self._check_idle()
+            if self._closed:
+                raise HTTPException(503, "Regress is shutting down.")
             run_dir = self.store.create(project.source)
-            job = Job(RunSpec(project, run_dir, settings.model, settings, options, self.llm_factory), self._exited)
-            job.start(self._context)
+            job = Job(
+                RunSpec(
+                    project,
+                    run_dir,
+                    settings.model,
+                    settings,
+                    options,
+                    self.llm_factory,
+                    _InheritedLock(self.lock_descriptor),
+                ),
+                lambda finished: self._exited(finished, release),
+            )
             self._jobs[job.id] = job
+            try:
+                job.prepare()
+                job.start(self._context)
+            except BaseException as error:
+                self._jobs.pop(job.id, None)
+                job._error = f"Could not start the run: {error}"
+                try:
+                    job._salvage()
+                    _durable_unlink(run_dir / RECOVERY_FILE)
+                except Exception:
+                    self._problem = "Workspace cleanup failed. Restart the server to recover the interrupted run."
+                    log.exception("Could not finalize a failed startup for run %s", job.id)
+                raise
         return job
 
     def lookup(self, run_id: str) -> RunHandle:
@@ -441,6 +711,8 @@ class RunManager:
         run_dir = self._run_dir(run_id)
         try:
             report = RunReport.model_validate_json((run_dir / REPORT_FILE).read_text())
+        except OSError as error:
+            raise HTTPException(404, f"No report for run {run_id}.") from error
         except ValueError as error:
             raise HTTPException(500, f"The report of run {run_id} is unreadable: {error}") from error
         return RunHandle(report, run_dir)
@@ -456,7 +728,7 @@ class RunManager:
     def events(self, handle: RunHandle, after: int = 0) -> list[RunEvent]:
         if handle.job is not None:
             return handle.job.since(after)[0]
-        return load_events(handle.run_dir)[after:]
+        return [event for event in load_events(handle.run_dir) if event.seq > after]
 
     def delete(self, run_id: str) -> None:
         with self._lock:
@@ -468,27 +740,54 @@ class RunManager:
     @contextmanager
     def exclusive(self, reason: str) -> Iterator[None]:
         """Keep runs from starting while something else changes the project, e.g. installing packages."""
-        with self._lock:
-            self._check_idle()
-            self._busy = reason
+        release = self.reserve(reason)
         try:
             yield
         finally:
+            release()
+
+    def reserve(self, reason: str) -> Callable[[], None]:
+        """Reserve the project for a run, evaluation or install; return an idempotent release callback."""
+        token = object()
+        with self._lock:
+            self._check_idle()
+            self._claim_project()
+            self._busy = reason
+            self._reservation = token
+
+        def release() -> None:
             with self._lock:
-                self._busy = None
+                if self._reservation is token:
+                    self._busy = None
+                    self._reservation = None
+
+        return release
 
     def shutdown(self) -> None:
         """Cancel what is running and wait for it to clean up."""
         with self._lock:
+            self._closed = True
             jobs = list(self._jobs.values())
         for job in jobs:
             job.cancel()
         for job in jobs:
-            job.done.wait(CANCEL_GRACE_SECONDS + 5)
+            if not job.done.wait(CANCEL_GRACE_SECONDS + 5):
+                job._signal(signal.SIGKILL)
+                if not job.done.wait(5):
+                    log.error("Run %s did not finish cleanup before shutdown", job.id)
+        with self._lock:
+            if self._project_lock is not None:
+                os.close(self._project_lock)
+                self._project_lock = None
 
     def project_path(self, relative: str) -> Path:
         """A path given relative to the project root. Paths that lead outside the project are refused."""
-        path = (self.root / relative).resolve()
+        try:
+            if "\0" in relative:
+                raise ValueError("embedded null character")
+            path = (self.root / relative).resolve()
+        except (OSError, RuntimeError, ValueError) as error:
+            raise ProjectError(f"Invalid project path: {relative!r}.") from error
         if not path.is_relative_to(self.root):
             raise ProjectError(f"{relative} is outside the project.")
         return path
@@ -497,6 +796,10 @@ class RunManager:
         return find_project_root(path.parent) == self.root
 
     def _check_idle(self) -> None:
+        if self._closed:
+            raise HTTPException(503, "Regress is shutting down.")
+        if self._problem is not None:
+            raise HTTPException(503, self._problem)
         if self._jobs:
             raise HTTPException(409, f"Run {next(iter(self._jobs))} is still in progress.")
         if self._busy:
@@ -504,12 +807,22 @@ class RunManager:
 
     def _run_dir(self, run_id: str) -> Path:
         run_dir = contained(self.store.base, run_id) if _RUN_ID.fullmatch(run_id) else None
-        if run_dir is None or not (run_dir / REPORT_FILE).is_file():
+        if run_dir is None or (self.store.base / run_id).is_symlink():
+            raise HTTPException(404, f"No run {run_id}.")
+        report = contained(run_dir, REPORT_FILE)
+        if (run_dir / REPORT_FILE).is_symlink() or not report.is_file():
             raise HTTPException(404, f"No run {run_id}.")
         return run_dir
 
     def _saved_summary(self, run_dir: Path) -> RunSummary | None:
-        path = run_dir / REPORT_FILE
+        if run_dir.is_symlink():
+            return None
+        if (run_dir / REPORT_FILE).is_symlink():
+            return None
+        try:
+            path = contained(run_dir, REPORT_FILE)
+        except HTTPException:
+            return None
         try:
             stamp = path.stat().st_mtime_ns
             cached = self._summaries.get(run_dir.name)
@@ -521,6 +834,10 @@ class RunManager:
         self._summaries[run_dir.name] = (stamp, summary)
         return summary
 
-    def _exited(self, job: Job) -> None:
+    def _exited(self, job: Job, release: Callable[[], None]) -> None:
         with self._lock:
-            self._jobs.pop(job.id, None)
+            if job.cleanup_failed:
+                self._problem = "Workspace cleanup failed. Restart the server to recover the interrupted run."
+            else:
+                self._jobs.pop(job.id, None)
+        release()

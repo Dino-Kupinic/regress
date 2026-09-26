@@ -24,6 +24,7 @@ from regress.catalog import (
     usable,
 )
 from regress.config import DEFAULT_MODEL, load_settings, save_user_settings, user_cache_dir, user_config_path
+from regress.errors import ProjectError
 from regress.ui import choose_model, format_duration
 
 API_MODELS = [
@@ -145,6 +146,96 @@ def test_without_an_api_key_the_sdk_list_is_used():
     assert all(is_text_model(m.id) for m in sdk_models())
 
 
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("fetched_at", float("nan")),
+        ("fetched_at", float("inf")),
+        ("fetched_at", "tomorrow"),
+        ("fetched_at", True),
+        ("fetched_at", 10**1000),
+        ("fetched_at", time.time() + 86400),
+        ("models", [{"id": 123}]),
+        ("models", [{"id": "gpt-test", "created": "bad"}]),
+        ("models", [{"id": "gpt-test", "created": 10**20}]),
+        ("models", [{"id": "gpt-test", "shutdown_date": 123}]),
+        ("models", [{"id": "gpt-test", "shutdown_date": "bad"}]),
+        ("all_ids", "gpt-test"),
+        ("all_ids", [123]),
+    ],
+)
+def test_malformed_model_cache_falls_back_safely(key, value):
+    load_catalog(client=fake_client())
+    path = user_cache_dir() / "models.json"
+    payload = json.loads(path.read_text())
+    payload[key] = value
+    path.write_text(json.dumps(payload))
+    assert load_catalog(client=fake_client(fail=True)).source == "sdk"
+
+
+def test_non_object_model_cache_falls_back_safely():
+    path = user_cache_dir() / "models.json"
+    path.parent.mkdir(parents=True)
+    path.write_text("[]")
+    assert load_catalog(client=fake_client(fail=True)).source == "sdk"
+
+
+def test_cached_models_are_filtered_again_for_retirement():
+    client = fake_client()
+    load_catalog(client=client)
+    path = user_cache_dir() / "models.json"
+    payload = json.loads(path.read_text())
+    payload["models"][0]["shutdown_date"] = date.today().isoformat()
+    path.write_text(json.dumps(payload))
+    cached = load_catalog(client=client)
+    assert cached.source == "cache"
+    assert "gpt-6-sol" not in [model.id for model in cached.models]
+    assert client.models.calls == 1
+
+
+@pytest.mark.parametrize("attribute", ["api_key", "base_url", "organization", "project"])
+def test_model_cache_is_scoped_to_current_credentials(attribute):
+    client = fake_client()
+    setattr(client, attribute, "first")
+    load_catalog(client=client)
+    assert load_catalog(client=client).source == "cache"
+    setattr(client, attribute, "second")
+    assert load_catalog(client=client).source == "api"
+    assert client.models.calls == 2
+
+
+def test_owned_catalog_client_is_closed_after_failure(monkeypatch):
+    closed = []
+    client = fake_client(fail=True)
+    client.close = lambda: closed.append(True)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr("regress.catalog.openai.OpenAI", lambda **kwargs: client)
+    assert load_catalog().source == "sdk"
+    assert closed == [True]
+
+
+def test_injected_catalog_client_is_not_closed():
+    closed = []
+    client = fake_client()
+    client.close = lambda: closed.append(True)
+    load_catalog(client=client)
+    assert closed == []
+
+
+def test_failed_cache_replace_preserves_previous_cache(monkeypatch):
+    load_catalog(client=fake_client())
+    path = user_cache_dir() / "models.json"
+    original = path.read_bytes()
+
+    def fail_replace(*args):
+        raise OSError("disk is full")
+
+    monkeypatch.setattr("regress.config.os.replace", fail_replace)
+    assert load_catalog(refresh=True, client=fake_client()).source == "api"
+    assert path.read_bytes() == original
+    assert list(path.parent.iterdir()) == [path]
+
+
 # --- user config -----------------------------------------------------------------------------
 
 
@@ -175,6 +266,26 @@ def test_invalid_user_settings_are_not_saved():
     with pytest.raises(Exception, match="rounds"):
         save_user_settings(rounds=99)
     assert not user_config_path().exists()
+
+
+def test_failed_config_replace_preserves_previous_settings(monkeypatch):
+    path = save_user_settings(model="gpt-test", rounds=2)
+    original = path.read_bytes()
+
+    def fail_replace(*args):
+        raise OSError("disk is full")
+
+    monkeypatch.setattr("regress.config.os.replace", fail_replace)
+    with pytest.raises(ProjectError, match="Could not save configuration"):
+        save_user_settings(rounds=3)
+    assert path.read_bytes() == original
+    assert list(path.parent.iterdir()) == [path]
+
+
+def test_saved_settings_are_normalized():
+    save_user_settings(model=" gpt-test ")
+    assert load_settings(None).model == "gpt-test"
+    assert 'model = "gpt-test"' in user_config_path().read_text()
 
 
 # --- picker ----------------------------------------------------------------------------------

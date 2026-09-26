@@ -21,11 +21,13 @@ PROPOSAL = TestFileProposal(summary="s", new_tests=["t"], equivalent_mutants=[],
 class FakeStream:
     def __init__(self, events, final=None, error: Exception | None = None):
         self.events, self.final, self.error = events, final, error
+        self.closed = False
 
     def __enter__(self):
         return self
 
     def __exit__(self, *exc):
+        self.closed = True
         return False
 
     def __iter__(self):
@@ -202,6 +204,110 @@ def test_missing_api_key_is_reported():
         require_api_key()
     with pytest.raises(LLMError, match="OPENAI_API_KEY"):
         OpenAILLM("gpt-test")
+
+
+def test_whitespace_api_key_is_not_accepted(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", " \t\n")
+    with pytest.raises(LLMError, match="OPENAI_API_KEY"):
+        require_api_key()
+
+
+def test_healthy_stream_cannot_outlive_total_deadline(monkeypatch):
+    elapsed = [0.0]
+    monkeypatch.setattr("regress.llm.time.monotonic", lambda: elapsed[0])
+
+    class EndlessStream(FakeStream):
+        def __iter__(self):
+            yield SimpleNamespace(type="response.created")
+            elapsed[0] = 2
+            yield SimpleNamespace(type="response.created")
+
+    stream = EndlessStream([])
+    llm, responses = llm_with(stream, max_duration=1)
+    with pytest.raises(LLMError, match="total time limit"):
+        llm.propose("i", "p")
+    assert stream.closed
+    assert len(responses.calls) == 1
+    assert responses.calls[0]["timeout"].read == 1
+
+
+def test_retries_share_total_deadline(monkeypatch):
+    elapsed = [0.0]
+    monkeypatch.setattr("regress.llm.time.monotonic", lambda: elapsed[0])
+    monkeypatch.setattr("regress.llm.time.sleep", lambda duration: elapsed.__setitem__(0, elapsed[0] + duration))
+    llm, responses = llm_with(httpx.ReadTimeout("idle"), max_duration=1)
+    llm.retry_delay = 3
+    with pytest.raises(LLMError, match="total time limit"):
+        llm.propose("i", "p")
+    assert elapsed[0] == 1
+    assert len(responses.calls) == 1
+
+
+def test_output_is_bounded_and_stream_is_closed(monkeypatch):
+    monkeypatch.setattr("regress.llm.MAX_RESPONSE_CHARS", 16)
+    stream = FakeStream(healthy_events("x" * 17), completed())
+    llm, responses = llm_with(stream, max_output_tokens=1024)
+    with pytest.raises(LLMError, match="maximum supported size"):
+        llm.propose("i", "p")
+    assert stream.closed
+    assert responses.calls[0]["max_output_tokens"] == 1024
+
+
+def test_failed_event_does_not_wait_for_stream_to_end():
+    stream = FakeStream([SimpleNamespace(type="error", message="bad request")], error=httpx.ReadTimeout("idle"))
+    llm, responses = llm_with(stream)
+    with pytest.raises(LLMError, match="bad request"):
+        llm.propose("i", "p")
+    assert len(responses.calls) == 1 and stream.closed
+
+
+def test_final_response_must_have_completed_status():
+    response = completed()
+    response.status = "incomplete"
+    response.incomplete_details = SimpleNamespace(reason="max_output_tokens")
+    llm, _ = llm_with(FakeStream(healthy_events(), response))
+    with pytest.raises(LLMError, match="max_output_tokens"):
+        llm.propose("i", "p")
+
+
+def test_owned_client_is_closed_once(monkeypatch):
+    closed = []
+    client = SimpleNamespace(close=lambda: closed.append(True))
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr("regress.llm.openai.OpenAI", lambda **kwargs: client)
+    with OpenAILLM("gpt-test") as llm:
+        assert not closed
+    llm.close()
+    assert closed == [True]
+    with pytest.raises(LLMError, match="already been closed"):
+        llm.propose("i", "p")
+
+
+def test_injected_client_is_not_closed():
+    closed = []
+    client = SimpleNamespace(close=lambda: closed.append(True))
+    with OpenAILLM("gpt-test", client=client):
+        pass
+    assert closed == []
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"retries": -1},
+        {"retries": 11},
+        {"retries": True},
+        {"idle_timeout": 0},
+        {"idle_timeout": float("nan")},
+        {"max_duration": float("inf")},
+        {"max_duration": -1},
+        {"max_output_tokens": 0},
+        {"max_output_tokens": True},
+    ],
+)
+def test_invalid_resource_limits_are_rejected(options):
+    with pytest.raises(ValueError):
+        OpenAILLM("gpt-test", client=SimpleNamespace(), **options)
 
 
 # --- the real SDK over a mocked HTTP transport ---------------------------------------------------

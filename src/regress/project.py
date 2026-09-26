@@ -80,7 +80,7 @@ def package_version(root: Path, name: str) -> str | None:
         if manifest.is_file():
             try:
                 return str(json.loads(manifest.read_text())["version"])
-            except (json.JSONDecodeError, KeyError):
+            except (OSError, ValueError, KeyError, TypeError):
                 return None
     return None
 
@@ -176,6 +176,13 @@ def load_project(source: Path, test_file: Path | None = None, runner: Runner = "
             raise ProjectError(f"Test file {test_file} is outside the project at {root}.")
     else:
         test_file = find_test_file(root, source) or default_test_path(root, source)
+    test_file = test_file.resolve()
+    if not test_file.is_relative_to(root):
+        raise ProjectError(f"Test file {test_file} is outside the project at {root}.")
+    if test_file.suffix not in SOURCE_EXTENSIONS:
+        raise ProjectError("The test file must be a JavaScript or TypeScript file.")
+    if test_file.exists() and not test_file.is_file():
+        raise ProjectError(f"Test file {test_file} is not a regular file.")
     if test_file == source:
         raise ProjectError("The test file and the source file must be different files.")
     return Project(root=root, source=source, test_file=test_file, toolchain=toolchain)

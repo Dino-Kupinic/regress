@@ -12,17 +12,19 @@ import shutil
 import tempfile
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, Field, computed_field, field_validator
 
 from regress.errors import CandidateRejected, RegressError
+from regress.files import atomic_write_text
 from regress.llm import LLM
 from regress.models import Stage
 from regress.pipeline import Pipeline, RunOptions
 from regress.project import Project, Runner, load_project
-from regress.store import RunStore, regress_dir
+from regress.store import RunStore, _check_artifact_path, regress_dir
 from regress.stryker import run_stryker
 from regress.ui import Reporter
 from regress.validate import Workspace
@@ -34,9 +36,9 @@ COUNTING_NOTE = "Totals count only modules with a result in every column, so eac
 
 
 class HiddenBug(BaseModel):
-    id: str
+    id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
     description: str
-    find: str
+    find: str = Field(min_length=1)
     replace: str
 
 
@@ -46,6 +48,20 @@ class BugSuite(BaseModel):
     test: str
     oracle: str | None = None
     bugs: list[HiddenBug]
+
+    @field_validator("source", "test", "oracle")
+    @classmethod
+    def relative_path(cls, value: str | None) -> str | None:
+        if value is not None and (not value or Path(value).is_absolute() or ".." in Path(value).parts):
+            raise ValueError("suite paths must be relative to the project and cannot contain '..'")
+        return value
+
+    @field_validator("bugs")
+    @classmethod
+    def unique_bug_ids(cls, value: list[HiddenBug]) -> list[HiddenBug]:
+        if len({bug.id for bug in value}) != len(value):
+            raise ValueError("hidden bug IDs must be unique")
+        return value
 
 
 class StageResult(BaseModel):
@@ -129,7 +145,13 @@ def load_suites(examples_dir: Path, names: list[str] | None = None) -> list[BugS
         raise RegressError(f"No {BUGS_DIR}/ directory in {examples_dir}.")
     suites = []
     for path in sorted(directory.glob("*.json")):
-        suite = BugSuite.model_validate_json(path.read_text())
+        try:
+            suite = BugSuite.model_validate_json(path.read_text(encoding="utf-8"))
+            for relative in (suite.source, suite.test, suite.oracle):
+                if relative and not (examples_dir / relative).resolve().is_relative_to(examples_dir.resolve()):
+                    raise ValueError(f"{relative} leads outside the project")
+        except (OSError, ValueError) as error:
+            raise RegressError(f"Invalid hidden bug suite {path.name}: {error}") from error
         suite.name = path.stem
         suites.append(suite)
     if names:
@@ -163,9 +185,11 @@ def hidden_bugs_caught(
         return stage
     workspace = Workspace(project)
     original = project.source.read_text()
-    workspace.write_tests(content)
     try:
+        workspace.write_tests(content)
         clean = run_vitest(project, output_dir, f"{suite.name}-{_slug(label)}-clean")
+        if not workspace.source_intact():
+            raise RegressError(f"{label} tests for {suite.name} modified the original source.")
         if not clean.success:
             raise RegressError(f"{label} tests for {suite.name} fail on the original source.")
         stage.tests = clean.total
@@ -173,12 +197,14 @@ def hidden_bugs_caught(
             occurrences = original.count(bug.find)
             if occurrences != 1:
                 raise RegressError(f"Hidden bug {bug.id}: `find` text occurs {occurrences} times in {suite.source}.")
-            project.source.write_text(original.replace(bug.find, bug.replace))
+            atomic_write_text(project.source, original.replace(bug.find, bug.replace))
             result = run_vitest(project, output_dir, f"{suite.name}-{_slug(label)}-{bug.id}")
             (stage.missed if result.success else stage.caught).append(bug.id)
     finally:
-        project.source.write_text(original)
-        workspace.restore()
+        try:
+            workspace.source_intact()
+        finally:
+            workspace.restore()
     return stage
 
 
@@ -192,18 +218,22 @@ def evaluate_regress(
     on_module: Callable[[BugSuite], None] | None = None,
 ) -> EvalResult:
     """Existing tests vs one-shot AI tests vs Regress, per module."""
-    llm = llm_factory()
-    options.measure_baseline = True
-    options.generate = True
-    result = EvalResult(created_at=datetime.now().astimezone(), mode="regress", model=llm.model, rounds=options.rounds)
+    options = replace(options, measure_baseline=True, generate=True)
     out_dir = _output_dir(examples_dir)
+    llm = llm_factory()
+    result = EvalResult(created_at=datetime.now().astimezone(), mode="regress", model=llm.model, rounds=options.rounds)
     try:
         for suite in suites:
             if on_module:
                 on_module(suite)
             _evaluate_module(examples_dir, suite, llm, options, reporter, runner, result, out_dir)
     finally:
-        _save(result, out_dir)  # also when interrupted, so finished modules are not lost
+        try:
+            _save(result, out_dir)  # also when interrupted, so finished modules are not lost
+        finally:
+            close = getattr(llm, "close", None)
+            if callable(close):
+                close()
     return result
 
 
@@ -258,7 +288,13 @@ def _hidden_bugs_for_stage(
     """Hidden bugs caught by a stage's saved test file; a stage without one catches none."""
     content = None
     if stage is not None and stage.test_file_snapshot:
-        content = (run_dir / stage.test_file_snapshot).read_text()
+        snapshot = (run_dir / stage.test_file_snapshot).resolve()
+        if not snapshot.is_relative_to(run_dir.resolve()):
+            raise RegressError("The saved test snapshot is outside the run directory.")
+        try:
+            content = snapshot.read_text(encoding="utf-8")
+        except (OSError, ValueError) as error:
+            raise RegressError(f"Cannot read the saved test snapshot: {error}") from error
     outcome = hidden_bugs_caught(project, suite, label, content, run_dir / "hidden-bugs")
     outcome.score = 0.0 if content is None else stage.score if stage else None
     outcome.tests = stage.test_count if stage else 0
@@ -279,35 +315,40 @@ def evaluate_oracles(
     """
     result = EvalResult(created_at=datetime.now().astimezone(), mode="oracle")
     out_dir = _output_dir(examples_dir)
-    for suite in suites:
-        if on_module:
-            on_module(suite)
-        module = ModuleResult(module=suite.name)
-        result.modules.append(module)
-        if not suite.oracle:
-            module.error = "No oracle test file configured."
-            continue
-        with sandbox(examples_dir) as root:
-            project = load_project(root / suite.source, root / suite.test, runner)
-            existing = project.test_file.read_text() if project.test_file.is_file() else None
-            oracle = (root / suite.oracle).read_text()
-            work = root / ".regress" / "oracle"
-            try:
-                for label, content in (("Existing tests", existing), ("Oracle", oracle)):
-                    stage = hidden_bugs_caught(project, suite, label, content, work)
-                    if measure_mutation and content is not None:
-                        workspace = Workspace(project)
-                        workspace.write_tests(content)
-                        try:
-                            stage.score = run_stryker(project, work, len(module.stages) + 1).score
-                        finally:
-                            workspace.restore()
-                    elif content is None:
-                        stage.score = 0.0
-                    module.stages.append(stage)
-            except RegressError as error:
-                module.error = str(error)
-    _save(result, out_dir)
+    try:
+        for suite in suites:
+            if on_module:
+                on_module(suite)
+            module = ModuleResult(module=suite.name)
+            result.modules.append(module)
+            if not suite.oracle:
+                module.error = "No oracle test file configured."
+                continue
+            with sandbox(examples_dir) as root:
+                project = load_project(root / suite.source, root / suite.test, runner)
+                existing = project.test_file.read_text() if project.test_file.is_file() else None
+                oracle = (root / suite.oracle).read_text()
+                work = root / ".regress" / "oracle"
+                try:
+                    for label, content in (("Existing tests", existing), ("Oracle", oracle)):
+                        stage = hidden_bugs_caught(project, suite, label, content, work)
+                        if measure_mutation and content is not None:
+                            workspace = Workspace(project)
+                            workspace.write_tests(content)
+                            try:
+                                stage.score = run_stryker(project, work, len(module.stages) + 1).score
+                            finally:
+                                try:
+                                    workspace.source_intact()
+                                finally:
+                                    workspace.restore()
+                        elif content is None:
+                            stage.score = 0.0
+                        module.stages.append(stage)
+                except RegressError as error:
+                    module.error = str(error)
+    finally:
+        _save(result, out_dir)
     return result
 
 
@@ -351,9 +392,18 @@ def _slug(text: str) -> str:
 
 def _output_dir(examples_dir: Path) -> Path:
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    path = regress_dir(examples_dir) / "eval" / stamp
-    path.mkdir(parents=True, exist_ok=True)
-    return path
+    base = regress_dir(examples_dir) / "eval"
+    _check_artifact_path(examples_dir, base)
+    base.mkdir(parents=True, exist_ok=True)
+    path = base / stamp
+    suffix = 1
+    while True:
+        try:
+            path.mkdir()
+            return path
+        except FileExistsError:
+            suffix += 1
+            path = base / f"{stamp}-{suffix}"
 
 
 def _keep_artifacts(store: RunStore, destination: Path) -> None:
@@ -364,5 +414,5 @@ def _keep_artifacts(store: RunStore, destination: Path) -> None:
 
 def _save(result: EvalResult, out_dir: Path) -> None:
     result.output_dir = str(out_dir)
-    (out_dir / "eval.json").write_text(result.model_dump_json(indent=2))
-    (out_dir / "eval.md").write_text(to_markdown(result))
+    atomic_write_text(out_dir / "eval.json", result.model_dump_json(indent=2))
+    atomic_write_text(out_dir / "eval.md", to_markdown(result))

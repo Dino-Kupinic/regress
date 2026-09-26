@@ -172,7 +172,10 @@ max_repairs = 2
 max_mutants = 40
 runner = "auto"       # "bun", "npx" or "auto"
 llm_timeout = 120     # seconds without any data from the model before retrying
+llm_max_duration = 1800  # total budget for one proposal, including retries
+llm_max_output_tokens = 32768  # output budget per request, including reasoning
 vitest_timeout = 300  # seconds a Vitest run may take before a candidate counts as hanging
+stryker_timeout = 1800  # seconds for one mutation run
 ```
 
 ## HTTP API
@@ -187,6 +190,8 @@ The OpenAPI schema at `/api/openapi.json` describes every request and response, 
 
 | Method | Path | What it does |
 |---|---|---|
+| `GET` | `/api/health` | Liveness and API version |
+| `GET` | `/api/ready` | Readiness: configured project, installed tools, API key, writable artifact storage (503 if unavailable) |
 | `GET` | `/api/project` | The project and whether a run can start: packages, toolchain, API key, active run |
 | `POST` | `/api/project/init` | Install what's missing and write `regress.toml`, like `regress init --yes` |
 | `GET` | `/api/project/sources` | Source files a run can target |
@@ -227,11 +232,18 @@ stream.addEventListener("end", (e) => {
 
 Each run executes in a process of its own. Cancelling sends it SIGINT, like Ctrl-C in `regress run`: the model call, Vitest or Stryker stops at once, the test file is restored, and the run ends as `cancelled`. Stopping the server cancels a run in progress the same way.
 
-The API has no authentication, so it only works locally:
+The API defaults to local access. For hosting, the bundled [Nginx deployment](docs/coolify.md) provides authentication:
 
 - It listens on 127.0.0.1 and answers only requests addressed to a local host name, which stops DNS rebinding.
 - Browsers can call it only from allowed origins: Vite's dev server on `http://localhost:5173` by default, or those given with `--origin`. Requests from other sites that change something get `403`, including simple requests that skip the CORS preflight.
 - `OPENAI_API_KEY` stays on the server. Only JavaScript and TypeScript files outside hidden and dependency folders can be read, so `.env` is never served.
+- Binding beyond loopback requires `--allow-remote`. Keep the API port private and expose only the authenticated proxy.
+
+API runs, evaluations and dependency installs share one exclusive project reservation. A second API server for the same project fails at startup. Do not run CLI mutation jobs against a project currently served by the API. The backend's process supervision and project locking require Linux or macOS.
+
+Requests have a 1 MiB body limit. Unexpected errors return a generic response with an `X-Request-ID` that also appears in server logs. Tool output retained in each log is capped at the most recent 1 MiB. Reports and configuration use atomic file replacement, and cancellation restores the original source and test bytes.
+
+New API runs also save recovery records before starting. On restart after a hard stop, unfinished API runs restore their original files and become failed runs; completed results remain intact.
 
 In development, let Vite proxy `/api` so the browser sees a single origin:
 
@@ -275,10 +287,13 @@ For a hosted demo, see [Coolify deployment](docs/coolify.md).
 uv sync
 uv run pytest                      # all tests (integration tests need `bun install` in examples/)
 uv run pytest -m "not integration" # fast unit tests only
-uv run ruff check . && uv run ruff format .
+uv run ruff check src tests
+uv run ruff format --check src tests
 ```
 
 The integration tests drive the full pipeline with a scripted model against real Vitest and Stryker. They cover improvement, repair of failing candidates, rejection with rollback, test file creation, hidden-bug checks, and runs started, streamed and cancelled over HTTP.
+
+The Backend GitHub Actions workflow runs lint, formatting, unit and integration tests, then builds the production container and smoke-tests readiness and proxy authentication. Tests use scripted models and do not call OpenAI.
 
 Code map (`src/regress/`):
 
@@ -299,4 +314,4 @@ Code map (`src/regress/`):
 
 ## Scope and roadmap
 
-The MVP covers TypeScript/JavaScript with Vitest and StrykerJS, one source file and one test file at a time, in local repositories, from the CLI or the local HTTP API. Next step: a web UI over the API.
+Regress covers TypeScript/JavaScript with Vitest and StrykerJS, one source file and one test file at a time, through the CLI or web app. Hosted deployments serve one trusted project and one operator group per instance. Independent users or untrusted repositories require separate isolated workers, credentials and storage.

@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 
 from regress.errors import RegressError
+from regress.files import atomic_write_text
 from regress.models import RunReport
 
 REPORT_FILE = "report.json"
@@ -13,11 +14,25 @@ REPORT_FILE = "report.json"
 def regress_dir(root: Path) -> Path:
     """The project's .regress directory, created on demand and ignored by git."""
     directory = root / ".regress"
+    _check_artifact_path(root, directory)
     directory.mkdir(exist_ok=True)
     gitignore = directory / ".gitignore"
     if not gitignore.exists():
-        gitignore.write_text("# Created by regress: run artifacts are local only.\n*\n")
+        atomic_write_text(gitignore, "# Created by regress: run artifacts are local only.\n*\n")
     return directory
+
+
+def _check_artifact_path(root: Path, path: Path) -> None:
+    """Reject symlinked artifact directories before creating or reading files in them."""
+    if not path.resolve().is_relative_to(root.resolve()):
+        raise RegressError(f"Artifact directory {path} leads outside the project.")
+    current = path
+    while current != root:
+        if current.is_symlink():
+            raise RegressError(f"Artifact directory {current} must not be a symlink.")
+        if current == current.parent:
+            raise RegressError(f"Artifact directory {path} is outside the project.")
+        current = current.parent
 
 
 class RunStore:
@@ -27,23 +42,33 @@ class RunStore:
 
     def create(self, source: Path) -> Path:
         regress_dir(self.root)
+        _check_artifact_path(self.root, self.base)
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         slug = re.sub(r"[^a-zA-Z0-9]+", "-", source.stem).strip("-").lower() or "run"
         run_dir = self.base / f"{stamp}-{slug}"
         suffix = 1
-        while run_dir.exists():
-            suffix += 1
-            run_dir = self.base / f"{stamp}-{slug}-{suffix}"
-        run_dir.mkdir(parents=True)
-        return run_dir
+        self.base.mkdir(parents=True, exist_ok=True)
+        while True:
+            try:
+                run_dir.mkdir()
+                return run_dir
+            except FileExistsError:
+                suffix += 1
+                run_dir = self.base / f"{stamp}-{slug}-{suffix}"
 
     def save(self, report: RunReport, run_dir: Path) -> None:
-        (run_dir / REPORT_FILE).write_text(report.model_dump_json(indent=2))
+        _check_artifact_path(self.root, run_dir)
+        atomic_write_text(run_dir / REPORT_FILE, report.model_dump_json(indent=2))
 
     def run_dirs(self) -> list[Path]:
+        _check_artifact_path(self.root, self.base)
         if not self.base.is_dir():
             return []
-        return sorted(p for p in self.base.iterdir() if (p / REPORT_FILE).is_file())
+        return sorted(
+            p
+            for p in self.base.iterdir()
+            if p.is_dir() and not p.is_symlink() and (p / REPORT_FILE).is_file() and not (p / REPORT_FILE).is_symlink()
+        )
 
     def load(self, run_id: str | None = None) -> tuple[RunReport, Path]:
         runs = self.run_dirs()
@@ -56,4 +81,7 @@ class RunStore:
             if not matches:
                 raise RegressError(f"No run matching '{run_id}'. List runs with `regress report --list`.")
             run_dir = matches[-1]
-        return RunReport.model_validate_json((run_dir / REPORT_FILE).read_text()), run_dir
+        try:
+            return RunReport.model_validate_json((run_dir / REPORT_FILE).read_text(encoding="utf-8")), run_dir
+        except (OSError, ValueError) as error:
+            raise RegressError(f"The report of run {run_dir.name} is unreadable: {error}") from error

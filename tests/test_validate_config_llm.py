@@ -69,6 +69,38 @@ def test_settings_reject_unknown_keys_and_bad_values(tmp_path):
         load_settings(tmp_path)
 
 
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("model", "   "),
+        ("model", "gpt-test\ninjected"),
+        ("model", "x" * 257),
+        ("reasoning_effort", "typo"),
+        ("rounds", True),
+        ("rounds", "2"),
+        ("ask_model", "false"),
+        ("llm_max_duration", 0),
+        ("llm_max_output_tokens", 999999),
+        ("vitest_timeout", 999999),
+        ("stryker_timeout", 999999),
+    ],
+)
+def test_settings_reject_ambiguous_and_unbounded_values(key, value):
+    with pytest.raises(ProjectError, match=key):
+        load_settings(None, **{key: value})
+
+
+def test_unreadable_configuration_is_an_actionable_error(tmp_path):
+    path = tmp_path / "regress.toml"
+    path.write_bytes(b"\xff")
+    with pytest.raises(ProjectError, match="Invalid .*regress.toml"):
+        load_settings(tmp_path)
+    path.unlink()
+    path.mkdir()
+    with pytest.raises(ProjectError, match="Invalid .*regress.toml"):
+        load_settings(tmp_path)
+
+
 def test_proposal_schema_is_valid_for_strict_structured_outputs():
     from openai.lib._pydantic import to_strict_json_schema
 

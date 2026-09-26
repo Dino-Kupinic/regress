@@ -190,3 +190,46 @@ def test_eval_markdown_explains_modules_counted_as_their_existing_tests():
     assert "| **All modules** | **20%** | **0/4** | **20%** | **0/4** | **20%** | **0/4** |" in markdown
     assert "- **rate-limiter:** The model did not produce valid tests in 3 attempts." in markdown
     assert "Totals count only" not in markdown
+
+
+def test_vitest_report_with_an_empty_suite_cannot_succeed():
+    result = parse_vitest_report({"success": True, "testResults": [{"assertionResults": []}]})
+    assert not result.success
+    assert result.suite_errors
+
+
+def test_stryker_locations_use_javascript_utf16_columns():
+    assert source_span(['const emoji = "😀"; return 1;\n'], 1, 21, 1, 27) == "return"
+
+
+def test_corrupt_tool_reports_have_actionable_errors():
+    import pytest
+
+    from regress.errors import ToolError
+
+    for malformed in (None, [], {"success": "false"}, {"success": True, "testResults": [None]}):
+        with pytest.raises(ToolError, match="invalid report"):
+            parse_vitest_report(malformed)
+    for malformed in (None, {}, {"files": []}, {"files": {"src/cart.ts": {"mutants": []}}}):
+        with pytest.raises(ToolError, match="invalid report"):
+            parse_stryker_report(malformed, "src/cart.ts", 1)
+
+
+def test_stryker_file_matching_requires_a_path_boundary():
+    import pytest
+
+    from regress.errors import ToolError
+
+    with pytest.raises(ToolError, match="no results"):
+        parse_stryker_report({"files": {"other-src/cart.ts": {"source": "", "mutants": []}}}, "src/cart.ts", 1)
+
+
+def test_invalid_stryker_locations_are_rejected():
+    import pytest
+
+    from regress.errors import ToolError
+
+    report = load_fixture("stryker-report.json")
+    report["files"]["src/cart.ts"]["mutants"][0]["location"]["start"]["line"] = 0
+    with pytest.raises(ToolError, match="invalid source location"):
+        parse_stryker_report(report, "src/cart.ts", 1)
