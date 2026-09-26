@@ -1,6 +1,7 @@
 import { cn } from "~/lib/utils";
 
 const tones = {
+  default: "bg-foreground",
   success: "bg-success",
   destructive: "bg-destructive",
   muted: "bg-muted-foreground",

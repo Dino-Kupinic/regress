@@ -23,3 +23,9 @@ export function dateTime(value: string) {
 export function fileName(path: string) {
   return path.split("/").at(-1) ?? path;
 }
+
+export function signedPoints(value: number | null | undefined) {
+  if (value == null) return "—";
+  const rounded = Math.round(value);
+  return `${rounded >= 0 ? "+" : ""}${rounded} pts`;
+}

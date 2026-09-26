@@ -22,6 +22,7 @@ import { type ApiState, SiteHeader } from "~/components/site-header";
 import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import { Button } from "~/components/ui/button";
 import { SidebarInset, SidebarProvider } from "~/components/ui/sidebar";
+import { Toaster } from "~/components/ui/sonner";
 import { TooltipProvider } from "~/components/ui/tooltip";
 import { api } from "~/lib/api";
 import "./styles.css";
@@ -67,6 +68,7 @@ export default function Root() {
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <AppShell />
+        <Toaster position="bottom-right" />
       </TooltipProvider>
     </QueryClientProvider>
   );

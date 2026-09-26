@@ -19,9 +19,10 @@
         "rules": {
           "a11y": {
             "useFocusableInteractive": "off",
+            "useKeyWithClickEvents": "off",
             "useSemanticElements": "off"
           },
-          "suspicious": { "noDocumentCookie": "off" }
+          "suspicious": { "noDocumentCookie": "off", "noDoubleEquals": "off" }
         }
       }
     }
