@@ -133,6 +133,30 @@ def install_specs(packages: list[str]) -> list[str]:
     return [VITEST_INSTALL_SPEC if name == "vitest" else name for name in packages]
 
 
+def planned_installs(root: Path) -> list[str]:
+    """What `regress init` installs: missing tools, and Vitest 4 in place of an unsupported Vitest 5."""
+    installs = install_specs(missing_packages(root))
+    vitest = package_version(root, "vitest")
+    if vitest and major(vitest) >= 5:
+        installs.append(VITEST_INSTALL_SPEC)
+    return installs
+
+
+def install_command(root: Path, packages: list[str]) -> list[str]:
+    """A dev-dependency install with the package manager the project's lockfile points to."""
+    lockfiles = {
+        "bun.lock": ["bun", "add", "-d"],
+        "bun.lockb": ["bun", "add", "-d"],
+        "pnpm-lock.yaml": ["pnpm", "add", "-D"],
+        "yarn.lock": ["yarn", "add", "-D"],
+        "package-lock.json": ["npm", "install", "-D"],
+    }
+    for lockfile, command in lockfiles.items():
+        if (root / lockfile).exists():
+            return [*command, *packages]
+    return ["bun", "add", "-d", *packages] if shutil.which("bun") else ["npm", "install", "-D", *packages]
+
+
 def load_project(source: Path, test_file: Path | None = None, runner: Runner = "auto") -> Project:
     source = source.expanduser().resolve()
     if not source.is_file():
