@@ -25,12 +25,17 @@ LABEL_WIDTH = 18
 VALUE_WIDTH = 6
 
 
+def _ignore_status(_: str) -> None:
+    pass
+
+
 class Reporter:
     """Pipeline progress callbacks. The base class is silent."""
 
     def start(self, project: Project, report: RunReport) -> None: ...
-    def activity(self, message: str) -> AbstractContextManager[object]:
-        return nullcontext()
+    def activity(self, message: str) -> AbstractContextManager[Callable[[str], None]]:
+        """Context for slow work; yields a callback that sets a short live status (e.g. "thinking")."""
+        return nullcontext(_ignore_status)
 
     def baseline(self, stage: Stage, exists: bool) -> None: ...
     def generated(self, baseline: Stage, stage: Stage) -> None: ...
@@ -88,22 +93,26 @@ class ConsoleReporter(Reporter):
         self._model = report.model
 
     @contextmanager
-    def activity(self, message: str) -> Iterator[None]:
-        """A spinner with a live elapsed-time counter, cleared when the work is done."""
+    def activity(self, message: str) -> Iterator[Callable[[str], None]]:
+        """A spinner with a live status and elapsed-time counter, cleared when the work is done."""
         if not self.console.is_terminal:
             # Nothing to animate in a log or pipe, and Live would leave blank lines behind.
-            yield
+            yield _ignore_status
             return
         progress = Progress(
             SpinnerColumn("dots"),
-            TextColumn("[dim]{task.description}...[/]"),
+            TextColumn("[dim]{task.description}{task.fields[status]}...[/]"),
             ElapsedColumn(),
             console=self.console,
             transient=True,
         )
+        task = progress.add_task(escape(message), total=None, status="")
+
+        def set_status(text: str) -> None:
+            progress.update(task, status=f" · {escape(text)}" if text else "")
+
         with progress:
-            progress.add_task(escape(message), total=None)
-            yield
+            yield set_status
 
     def baseline(self, stage: Stage, exists: bool) -> None:
         if not exists:

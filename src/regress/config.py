@@ -22,6 +22,7 @@ rounds = 1            # improvement rounds driven by surviving mutants
 max_repairs = 2       # retries when a generated test file fails validation
 max_mutants = 40      # undetected mutants sent to the model per round
 runner = "auto"       # how to run Vitest and Stryker: "bun", "npx", or "auto"
+# llm_timeout = 300   # seconds the model may send nothing before Regress retries once
 """
 
 USER_CONFIG_HEADER = "# Your personal Regress defaults. Manage them with `regress models`.\n"
@@ -39,6 +40,7 @@ class Settings(BaseModel):
     max_repairs: int = Field(default=2, ge=0, le=5)
     max_mutants: int = Field(default=40, ge=1, le=200)
     runner: Literal["auto", "bun", "npx"] = "auto"
+    llm_timeout: int = Field(default=300, ge=30, le=3600)
     vitest_timeout: int = Field(default=300, ge=10)
     stryker_timeout: int = Field(default=1800, ge=30)
 

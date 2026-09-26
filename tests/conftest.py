@@ -25,7 +25,7 @@ class ScriptedLLM:
         self.responses = list(responses)
         self.prompts: list[str] = []
 
-    def propose(self, instructions: str, prompt: str) -> Completion:
+    def propose(self, instructions: str, prompt: str, on_status=None, on_warning=None) -> Completion:
         self.prompts.append(prompt)
         if not self.responses:
             raise AssertionError("ScriptedLLM ran out of responses")

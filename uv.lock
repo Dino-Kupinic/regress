@@ -350,6 +350,7 @@ name = "regress"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "httpx2" },
     { name = "openai" },
     { name = "pydantic" },
     { name = "python-dotenv" },
@@ -365,6 +366,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "httpx2", specifier = ">=2.13.1" },
     { name = "openai", specifier = ">=3.19.2" },
     { name = "pydantic", specifier = ">=2.13.5" },
     { name = "python-dotenv", specifier = ">=1.2.3" },

@@ -168,8 +168,8 @@ class Pipeline:
         for attempt in range(1, attempts + 1):
             suffix = f" (attempt {attempt}/{attempts})" if attempt > 1 else ""
             started = time.monotonic()
-            with self.reporter.activity(f"{verb} with {self.llm.model}{suffix}"):
-                completion = self.llm.propose(INSTRUCTIONS, prompt)
+            with self.reporter.activity(f"{verb} with {self.llm.model}{suffix}") as status:
+                completion = self.llm.propose(INSTRUCTIONS, prompt, on_status=status, on_warning=self.reporter.warn)
             llm_seconds += time.monotonic() - started
             self.report.usage.add(completion.input_tokens, completion.output_tokens)
             content = clean_test_file(completion.proposal.test_file)

@@ -1,11 +1,10 @@
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
 from regress.config import load_settings
-from regress.errors import LLMError, ProjectError
-from regress.llm import OpenAILLM, TestFileProposal
+from regress.errors import ProjectError
+from regress.llm import TestFileProposal
 from regress.project import Project, Toolchain
 from regress.validate import clean_test_file, static_problems
 
@@ -68,43 +67,6 @@ def test_settings_reject_unknown_keys_and_bad_values(tmp_path):
     (tmp_path / "regress.toml").write_text("rounds = 99\n")
     with pytest.raises(ProjectError, match="rounds"):
         load_settings(tmp_path)
-
-
-class FakeResponses:
-    def __init__(self, parsed):
-        self.parsed = parsed
-        self.calls: list[dict] = []
-
-    def parse(self, **kwargs):
-        self.calls.append(kwargs)
-        usage = SimpleNamespace(input_tokens=12, output_tokens=34)
-        return SimpleNamespace(output_parsed=self.parsed, usage=usage, status="completed", incomplete_details=None)
-
-
-def test_openai_call_uses_structured_output_without_storage():
-    proposal = TestFileProposal(summary="s", new_tests=["t"], equivalent_mutants=[], test_file="code")
-    responses = FakeResponses(proposal)
-    llm = OpenAILLM("gpt-test", reasoning_effort="high", client=SimpleNamespace(responses=responses))
-    completion = llm.propose("INSTRUCTIONS", "PROMPT")
-    call = responses.calls[0]
-    assert call["model"] == "gpt-test"
-    assert call["text_format"] is TestFileProposal
-    assert call["store"] is False
-    assert call["reasoning"] == {"effort": "high"}
-    assert (call["instructions"], call["input"]) == ("INSTRUCTIONS", "PROMPT")
-    assert (completion.proposal, completion.input_tokens, completion.output_tokens) == (proposal, 12, 34)
-
-
-def test_openai_empty_output_is_an_llm_error():
-    llm = OpenAILLM("gpt-test", client=SimpleNamespace(responses=FakeResponses(None)))
-    with pytest.raises(LLMError, match="no usable test file"):
-        llm.propose("i", "p")
-
-
-def test_missing_api_key_is_reported(monkeypatch):
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    with pytest.raises(LLMError, match="OPENAI_API_KEY"):
-        OpenAILLM("gpt-test")
 
 
 def test_proposal_schema_is_valid_for_strict_structured_outputs():

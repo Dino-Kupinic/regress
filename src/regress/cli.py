@@ -144,7 +144,7 @@ def run(
         settings = load_settings(root, rounds=rounds, model=model, runner=runner)
         project = load_project(source, test, settings.runner)
         require_api_key()
-        llm = OpenAILLM(_pick_model(settings, yes), settings.reasoning_effort)
+        llm = OpenAILLM(_pick_model(settings, yes), settings.reasoning_effort, idle_timeout=settings.llm_timeout)
         options = RunOptions(
             rounds=settings.rounds,
             max_repairs=settings.max_repairs,
@@ -326,7 +326,7 @@ def eval_command(
             result = evaluate_regress(
                 examples,
                 suites,
-                lambda: OpenAILLM(chosen, settings.reasoning_effort),
+                lambda: OpenAILLM(chosen, settings.reasoning_effort, idle_timeout=settings.llm_timeout),
                 options,
                 ConsoleReporter(console, verbose),
                 settings.runner,
