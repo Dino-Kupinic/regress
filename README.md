@@ -71,7 +71,7 @@ Improvement         +47%
 ✓ Kept improved tests in test/cart.test.ts
 ```
 
-This output is from a run with a scripted model. See [Evaluation](#evaluation) for real-model numbers. While Regress waits on the model, Vitest or Stryker, a spinner shows the elapsed time (`Improving tests with gpt-6-luna... 42s`).
+This output is from a run with a scripted model. See [Evaluation](#evaluation) for real-model numbers. While Regress waits on the model, Vitest or Stryker, a spinner shows the elapsed time. For the model it also shows what it is doing: `thinking` (with a headline when the model provides a reasoning summary) or `writing ~3,100 tokens`. If OpenAI goes quiet, the spinner says for how long (`quiet for 45s`). In logs or piped output, Regress prints a progress line every 30 seconds. A healthy response sends data every few seconds, so after 2 minutes of silence Regress reports the stall and retries, up to 3 attempts.
 
 Useful flags for `regress run`:
 
@@ -170,6 +170,7 @@ rounds = 1
 max_repairs = 2
 max_mutants = 40
 runner = "auto"       # "bun", "npx" or "auto"
+llm_timeout = 120     # seconds without any data from the model before retrying
 ```
 
 ## HTTP API

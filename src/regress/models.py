@@ -33,6 +33,9 @@ class TestRunResult(BaseModel):
     success: bool
     tests: list[TestCase] = Field(default_factory=list)
     suite_errors: list[str] = Field(default_factory=list)
+    # Failures outside any single test (a throwing beforeAll/afterAll, an unhandled rejection):
+    # every test can pass while the run as a whole fails.
+    run_errors: list[str] = Field(default_factory=list)
     output: str = ""
 
     @property

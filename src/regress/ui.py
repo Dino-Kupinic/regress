@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import threading
+import time
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from pathlib import Path
@@ -72,6 +74,21 @@ class ElapsedColumn(ProgressColumn):
         return Text(format_duration(task.elapsed or 0), style="cyan")
 
 
+QUIET_AFTER_SECONDS = 20
+ACTIVITY_HEARTBEAT_SECONDS = 30
+
+
+class QuietColumn(ProgressColumn):
+    """How long nothing has arrived, once that is unusual: makes a stalled request visible."""
+
+    def render(self, task: Task) -> Text:
+        since = task.fields.get("since")
+        quiet = time.monotonic() - since if since is not None else 0
+        if quiet < QUIET_AFTER_SECONDS:
+            return Text("")
+        return Text(f"· quiet for {format_duration(quiet)}", style="yellow")
+
+
 class ConsoleReporter(Reporter):
     def __init__(self, console: Console | None = None, verbose: bool = False) -> None:
         self.console = console or Console(highlight=False)
@@ -85,7 +102,7 @@ class ConsoleReporter(Reporter):
     def start(self, project: Project, report: RunReport) -> None:
         self.console.print("[bold]regress[/]\n")
         self.console.print(f"Analyzing [bold]{escape(project.source_rel)}[/]...")
-        tests = project.test_rel + ("" if report.test_file_existed else " [dim](will be created)[/]")
+        tests = escape(project.test_rel) + ("" if report.test_file_existed else " [dim](will be created)[/]")
         root = _display_path(project.root)
         self.console.print(f"[dim]  project  {escape(root)} ({project.toolchain.describe()})[/]")
         self.console.print(f"[dim]  tests    [/][dim]{tests}[/]")
@@ -94,22 +111,50 @@ class ConsoleReporter(Reporter):
 
     @contextmanager
     def activity(self, message: str) -> Iterator[Callable[[str], None]]:
-        """A spinner with a live status and elapsed-time counter, cleared when the work is done."""
+        """Show a live spinner in terminals and periodic progress in captured output."""
         if not self.console.is_terminal:
-            # Nothing to animate in a log or pipe, and Live would leave blank lines behind.
-            yield _ignore_status
+            self.console.print(f"[dim]{escape(message)}...[/]")
+            started = last_event = time.monotonic()
+            status = ""
+            stop = threading.Event()
+
+            def set_status(text: str) -> None:
+                nonlocal last_event, status
+                status = text
+                last_event = time.monotonic()
+
+            def heartbeat() -> None:
+                while not stop.wait(ACTIVITY_HEARTBEAT_SECONDS):
+                    now = time.monotonic()
+                    detail = f" · {escape(status)}" if status else ""
+                    quiet = now - last_event
+                    if quiet >= QUIET_AFTER_SECONDS:
+                        detail += f" · quiet for {format_duration(quiet)}"
+                    self.console.print(
+                        f"[dim]Still {escape(message.lower())}{detail} · {format_duration(now - started)} elapsed[/]"
+                    )
+
+            thread = threading.Thread(target=heartbeat, daemon=True)
+            thread.start()
+            try:
+                yield set_status
+            finally:
+                stop.set()
+                thread.join()
             return
         progress = Progress(
             SpinnerColumn("dots"),
             TextColumn("[dim]{task.description}{task.fields[status]}...[/]"),
             ElapsedColumn(),
+            QuietColumn(),
             console=self.console,
             transient=True,
         )
-        task = progress.add_task(escape(message), total=None, status="")
+        task = progress.add_task(escape(message), total=None, status="", since=None)
 
         def set_status(text: str) -> None:
-            progress.update(task, status=f" · {escape(text)}" if text else "")
+            # Each call means data arrived, which resets the quiet counter.
+            progress.update(task, status=f" · {escape(text)}" if text else "", since=time.monotonic())
 
         with progress:
             yield set_status
@@ -282,8 +327,8 @@ def render_run_list(reports: list[tuple[RunReport, Path]], console: Console) -> 
         reference, kept = report.reference, report.kept
         delta = report.improvement
         table.add_row(
-            report.id,
-            report.source_file,
+            escape(report.id),
+            escape(report.source_file),
             report.status,
             format_score(reference.score if reference else None),
             format_score(kept.score if kept else None),

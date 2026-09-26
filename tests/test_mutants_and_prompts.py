@@ -51,6 +51,15 @@ def test_describes_multiline_block_removal():
     assert "replaced with:\n    {}" in text
 
 
+def test_short_description_ignores_a_source_edited_after_the_run():
+    # `regress report` reads the source from disk, which may have changed since the run.
+    run = parse_stryker_report(load_fixture("stryker-report.json"), "src/cart.ts", 1)
+    m = next(m for m in run.mutants if m.id == "3")
+    fallback = "qty >= max  →  qty > max"
+    assert short_description(m, ["export const x = 1;\n"]) == fallback  # file got shorter
+    assert short_description(m, ["// new header\n", *LINES]) == fallback  # lines shifted
+
+
 CTX = PromptContext(
     source_rel="src/cart.ts", source=SOURCE, test_rel="test/cart.test.ts", import_path="../src/cart", language="ts"
 )
