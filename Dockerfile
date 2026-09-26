@@ -1,9 +1,10 @@
-FROM oven/bun:1.3.13 AS web-build
+FROM node:22-bookworm-slim AS web-build
+COPY --from=oven/bun:1.3.13 /usr/local/bin/bun /usr/local/bin/bun
 WORKDIR /build/web
 COPY web/package.json web/bun.lock web/.npmrc ./
 RUN bun install --frozen-lockfile
 COPY web/ ./
-RUN bun run build
+RUN npm run build
 
 FROM oven/bun:1.3.13 AS examples-build
 WORKDIR /build/examples
