@@ -1,8 +1,9 @@
+import json
 from datetime import datetime
 
 from conftest import load_fixture
 
-from regress.evaluation import EvalResult, ModuleResult, to_markdown
+from regress.evaluation import EvalResult, ModuleResult, StageResult, to_markdown
 from regress.models import MutantStatus, MutationRun, TestStatus
 from regress.stryker import parse_stryker_report, source_span
 from regress.vitest import parse_vitest_report
@@ -142,3 +143,50 @@ def test_eval_markdown_keeps_multiline_errors_on_one_table_row():
     )
     row = next(line for line in to_markdown(result).splitlines() if line.startswith("| cart"))
     assert "⚠ The existing tests do not pass. - a \\| b |" in row
+
+
+def _stage(label: str, score: float, caught: int, missed: int) -> StageResult:
+    return StageResult(
+        label=label, score=score, caught=[f"c{i}" for i in range(caught)], missed=[f"m{i}" for i in range(missed)]
+    )
+
+
+def test_eval_totals_add_up_the_same_modules_in_every_column():
+    complete = ModuleResult(
+        module="cart",
+        stages=[_stage("Existing tests", 30, 0, 5), _stage("One-shot AI", 90, 5, 0), _stage("Regress", 95, 5, 0)],
+    )
+    # Its AI columns are missing (an API error, say): counting its existing tests alone would skew the columns.
+    partial = ModuleResult(module="slugify", stages=[_stage("Existing tests", 20, 0, 4)], error="API down")
+    failed = ModuleResult(module="backoff", error="Stryker failed")
+    result = EvalResult(created_at=datetime.now(), mode="regress", modules=[complete, partial, failed])
+
+    assert result.counted_modules == ["cart"]
+    assert [(t.label, t.score, t.caught, t.bugs_total) for t in result.totals] == [
+        ("Existing tests", 30, 0, 5),
+        ("One-shot AI", 90, 5, 5),
+        ("Regress", 95, 5, 5),
+    ]
+    assert result.totals_label == "1 of 3 modules"
+    markdown = to_markdown(result)
+    assert "| **1 of 3 modules** | **30%** | **0/5** | **90%** | **5/5** | **95%** | **5/5** |" in markdown
+    assert "Totals count only modules with a result in every column" in markdown
+    # Totals are part of the saved JSON (and the API's responses), so every client shows the same numbers.
+    saved = json.loads(result.model_dump_json())
+    assert saved["counted_modules"] == ["cart"] and saved["totals"][1]["caught"] == 5
+    assert EvalResult.model_validate_json(result.model_dump_json()).totals == result.totals
+
+
+def test_eval_markdown_explains_modules_counted_as_their_existing_tests():
+    rejected = ModuleResult(
+        module="rate-limiter",
+        stages=[_stage(label, 20, 0, 4) for label in ("Existing tests", "One-shot AI", "Regress")],
+        note="The model did not produce valid tests in 3 attempts.",
+    )
+    result = EvalResult(created_at=datetime.now(), mode="regress", modules=[rejected])
+
+    assert result.totals_label == "All modules"
+    markdown = to_markdown(result)
+    assert "| **All modules** | **20%** | **0/4** | **20%** | **0/4** | **20%** | **0/4** |" in markdown
+    assert "- **rate-limiter:** The model did not produce valid tests in 3 attempts." in markdown
+    assert "Totals count only" not in markdown

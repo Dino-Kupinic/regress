@@ -4,7 +4,7 @@ import { useLoaderData } from "react-router";
 import { Button } from "~/components/ui/button";
 import { Card } from "~/components/ui/card";
 import { Table } from "~/components/ui/table";
-import { api, type EvalStage } from "~/lib/api";
+import { api } from "~/lib/api";
 import { dateTime, percent } from "~/lib/utils";
 
 export async function clientLoader() {
@@ -51,29 +51,17 @@ export default function Evaluation() {
     (item) => item.module === suite?.name,
   );
   const labels = ["Existing tests", "One-shot AI", "Regress", "Oracle"];
-  const allStages = (label: string) =>
-    latest?.modules
-      .map((item) =>
-        item.stages.find((stage) =>
-          stage.label.toLowerCase().includes(label.toLowerCase()),
-        ),
-      )
-      .filter((item): item is EvalStage => !!item) ?? [];
+  // The API sums each column over the same modules, so totals are not recomputed here.
   const summary = (label: string) => {
-    const stages = allStages(label);
-    const scores = stages.filter((item) => item.score != null);
+    const total = latest?.totals.find((item) => item.label === label);
     return {
-      score: scores.length
-        ? scores.reduce((sum, item) => sum + (item.score ?? 0), 0) /
-          scores.length
-        : null,
-      caught: stages.reduce((sum, item) => sum + item.caught.length, 0),
-      total: stages.reduce(
-        (sum, item) => sum + item.caught.length + item.missed.length,
-        0,
-      ),
+      score: total?.score ?? null,
+      caught: total?.caught ?? 0,
+      total: total?.bugs_total ?? 0,
     };
   };
+  const partial =
+    latest && latest.counted_modules.length < latest.modules.length;
   return (
     <div className="page evaluation-page">
       <div className="page-header">
@@ -152,6 +140,13 @@ export default function Evaluation() {
           );
         })}
       </div>
+      {partial && (
+        <p className="small muted">
+          Totals cover {latest.counted_modules.length} of{" "}
+          {latest.modules.length} modules: only modules with a result in every
+          column count, so each column adds up the same modules.
+        </p>
+      )}
       {!latest ? (
         <Card className="empty-state">
           <h3>No evaluation results yet</h3>
@@ -206,6 +201,9 @@ export default function Evaluation() {
                           </button>
                           {item.error && (
                             <p className="small danger">{item.error}</p>
+                          )}
+                          {item.note && (
+                            <p className="small muted">{item.note}</p>
                           )}
                         </td>
                         {labels.map((label) => {

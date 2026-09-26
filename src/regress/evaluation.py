@@ -15,10 +15,11 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
-from regress.errors import RegressError
+from regress.errors import CandidateRejected, RegressError
 from regress.llm import LLM
+from regress.models import Stage
 from regress.pipeline import Pipeline, RunOptions
 from regress.project import Project, Runner, load_project
 from regress.store import RunStore, regress_dir
@@ -28,6 +29,8 @@ from regress.validate import Workspace
 from regress.vitest import run_vitest
 
 BUGS_DIR = "hidden-bugs"
+AI_LABELS = ("One-shot AI", "Regress")
+COUNTING_NOTE = "Totals count only modules with a result in every column, so each column adds up the same modules."
 
 
 class HiddenBug(BaseModel):
@@ -61,7 +64,17 @@ class ModuleResult(BaseModel):
     module: str
     stages: list[StageResult] = Field(default_factory=list)
     error: str | None = None
+    note: str | None = None  # how a result was counted, e.g. when the model never wrote valid tests
     run_id: str | None = None
+
+
+class StageTotal(BaseModel):
+    """One column summed over the modules that have a result in every column."""
+
+    label: str
+    score: float | None = None  # mean mutation score
+    caught: int = 0
+    bugs_total: int = 0
 
 
 class EvalResult(BaseModel):
@@ -79,12 +92,35 @@ class EvalResult(BaseModel):
             labels += [s.label for s in module.stages if s.label not in labels]
         return labels
 
-    def totals(self, label: str) -> tuple[float | None, int, int]:
-        """Mean mutation score, bugs caught, and bugs total for one stage across modules."""
-        stages = [s for m in self.modules for s in m.stages if s.label == label]
-        scores = [s.score for s in stages if s.score is not None]
-        mean = sum(scores) / len(scores) if scores else None
-        return mean, sum(len(s.caught) for s in stages), sum(s.bugs_total for s in stages)
+    @computed_field
+    @property
+    def counted_modules(self) -> list[str]:
+        """Modules with a result in every column: the only ones totals count, so columns stay comparable."""
+        labels = set(self.stage_labels)
+        return [m.module for m in self.modules if m.stages and labels <= {s.label for s in m.stages}]
+
+    @computed_field
+    @property
+    def totals(self) -> list[StageTotal]:
+        counted = set(self.counted_modules)
+        totals = []
+        for label in self.stage_labels:
+            stages = [s for m in self.modules if m.module in counted for s in m.stages if s.label == label]
+            scores = [s.score for s in stages if s.score is not None]
+            totals.append(
+                StageTotal(
+                    label=label,
+                    score=sum(scores) / len(scores) if scores else None,
+                    caught=sum(len(s.caught) for s in stages),
+                    bugs_total=sum(s.bugs_total for s in stages),
+                )
+            )
+        return totals
+
+    @property
+    def totals_label(self) -> str:
+        counted, total = len(self.counted_modules), len(self.modules)
+        return "All modules" if counted == total else f"{counted} of {total} modules"
 
 
 def load_suites(examples_dir: Path, names: list[str] | None = None) -> list[BugSuite]:
@@ -186,8 +222,11 @@ def _evaluate_module(
     with sandbox(examples_dir) as root:
         project = load_project(root / suite.source, root / suite.test, runner)
         store = RunStore(root)
+        rejected: CandidateRejected | None = None
         try:
-            report = Pipeline(project, llm, options, reporter, store).run()
+            Pipeline(project, llm, options, reporter, store).run()
+        except CandidateRejected as error:
+            rejected = error  # an outcome of the approach under test, not a failed measurement
         except RegressError as error:
             module.error = str(error)
             return
@@ -195,25 +234,35 @@ def _evaluate_module(
             # Copy the run out of the throwaway sandbox even when it failed or was interrupted.
             _keep_artifacts(store, out_dir / suite.name)
 
-        run_dir = store.run_dirs()[-1]
+        report, run_dir = store.load()
         module.run_id = report.id
-        wanted = [
-            ("Existing tests", report.stage("baseline")),
-            ("One-shot AI", report.stage("generated")),
-            ("Regress", report.kept),
-        ]
         try:
-            for label, stage in wanted:
-                content = None
-                if stage is not None and stage.test_file_snapshot:
-                    content = (run_dir / stage.test_file_snapshot).read_text()
-                outcome = hidden_bugs_caught(project, suite, label, content, run_dir / "hidden-bugs")
-                outcome.score = 0.0 if content is None else stage.score if stage else None
-                outcome.tests = stage.test_count if stage else 0
-                module.stages.append(outcome)
+            existing = _hidden_bugs_for_stage(project, suite, "Existing tests", report.stage("baseline"), run_dir)
+            module.stages.append(existing)
+            if rejected is not None:
+                # No valid test file, so the run kept the existing tests. Leaving the module out would
+                # total only the modules the model managed, which flatters both AI columns.
+                module.stages += [existing.model_copy(update={"label": label}, deep=True) for label in AI_LABELS]
+                module.note = f"{rejected} One-shot AI and Regress count as the existing tests, which the run kept."
+            else:
+                for label, stage in zip(AI_LABELS, (report.stage("generated"), report.kept), strict=True):
+                    module.stages.append(_hidden_bugs_for_stage(project, suite, label, stage, run_dir))
         except RegressError as error:
             module.error = str(error)
         _keep_artifacts(store, out_dir / suite.name)
+
+
+def _hidden_bugs_for_stage(
+    project: Project, suite: BugSuite, label: str, stage: Stage | None, run_dir: Path
+) -> StageResult:
+    """Hidden bugs caught by a stage's saved test file; a stage without one catches none."""
+    content = None
+    if stage is not None and stage.test_file_snapshot:
+        content = (run_dir / stage.test_file_snapshot).read_text()
+    outcome = hidden_bugs_caught(project, suite, label, content, run_dir / "hidden-bugs")
+    outcome.score = 0.0 if content is None else stage.score if stage else None
+    outcome.tests = stage.test_count if stage else 0
+    return outcome
 
 
 def evaluate_oracles(
@@ -280,13 +329,16 @@ def to_markdown(result: EvalResult) -> str:
         suffix = f" ⚠ {error}" if error else ""
         rows.append(f"| {module.module}{suffix} | " + " | ".join(cells) + " |")
     totals = []
-    for label in labels:
-        mean, caught, total = result.totals(label)
-        totals += [f"**{_pct(mean)}**", f"**{caught}/{total}**"]
-    rows.append("| **All modules** | " + " | ".join(totals) + " |")
+    for total in result.totals:
+        totals += [f"**{_pct(total.score)}**", f"**{total.caught}/{total.bugs_total}**"]
+    rows.append(f"| **{result.totals_label}** | " + " | ".join(totals) + " |")
+    notes = [f"- **{m.module}:** {m.note}" for m in result.modules if m.note]
+    if len(result.counted_modules) < len(result.modules):
+        notes.append(f"- {COUNTING_NOTE}")
     title = f"# Regress evaluation ({result.mode})\n\n"
     meta = f"Model: `{result.model}` · rounds: {result.rounds}\n\n" if result.model else ""
-    return title + meta + "\n".join([header, divider, *rows]) + "\n"
+    table = "\n".join([header, divider, *rows]) + "\n"
+    return title + meta + table + ("\n" + "\n".join(notes) + "\n" if notes else "")
 
 
 def _pct(score: float | None) -> str:
