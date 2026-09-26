@@ -13,7 +13,7 @@ RUN bun install --frozen-lockfile
 
 FROM python:3.13-slim-bookworm
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates nginx libstdc++6 openssl \
+    && apt-get install -y --no-install-recommends ca-certificates curl nginx libstdc++6 openssl \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=node:22-bookworm-slim /usr/local/bin/node /usr/local/bin/node
 COPY --from=oven/bun:1.3.13 /usr/local/bin/bun /usr/local/bin/bun
