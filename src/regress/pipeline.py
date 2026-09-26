@@ -164,10 +164,13 @@ class Pipeline:
         prompt, problems = task_prompt, []
         attempts = self.options.max_repairs + 1
         verb = "Generating tests" if kind == "generated" else "Improving tests"
+        llm_seconds = 0.0
         for attempt in range(1, attempts + 1):
             suffix = f" (attempt {attempt}/{attempts})" if attempt > 1 else ""
+            started = time.monotonic()
             with self.reporter.activity(f"{verb} with {self.llm.model}{suffix}"):
                 completion = self.llm.propose(INSTRUCTIONS, prompt)
+            llm_seconds += time.monotonic() - started
             self.report.usage.add(completion.input_tokens, completion.output_tokens)
             content = clean_test_file(completion.proposal.test_file)
             name = self._log_llm(kind, attempt, prompt, completion)
@@ -193,6 +196,7 @@ class Pipeline:
                     test_names=sorted(check.result.names),
                     summary=proposal.summary,
                     attempts=attempt,
+                    llm_seconds=round(llm_seconds, 1),
                     targeted_mutants=targeted,
                     equivalent_mutants=[i for i in proposal.equivalent_mutants if i in targeted],
                 )

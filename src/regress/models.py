@@ -144,6 +144,7 @@ class Stage(BaseModel):
     mutation: MutationRun | None = None
     summary: str | None = None
     attempts: int = 0
+    llm_seconds: float = 0.0
     equivalent_mutants: list[str] = Field(default_factory=list)
     targeted_mutants: list[str] = Field(default_factory=list)
     rejected: bool = False

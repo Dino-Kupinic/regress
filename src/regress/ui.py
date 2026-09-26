@@ -8,7 +8,9 @@ from typing import TYPE_CHECKING
 
 from rich.console import Console
 from rich.markup import escape
+from rich.progress import Progress, ProgressColumn, SpinnerColumn, Task, TextColumn
 from rich.table import Table
+from rich.text import Text
 
 from regress.models import MutantStatus, MutationRun, RunReport, Stage
 from regress.mutants import short_description
@@ -50,11 +52,24 @@ def format_delta(delta: float) -> str:
     return f"{delta:+.0f}%"
 
 
+def format_duration(seconds: float) -> str:
+    seconds = int(seconds)
+    return f"{seconds}s" if seconds < 60 else f"{seconds // 60}m {seconds % 60:02d}s"
+
+
+class ElapsedColumn(ProgressColumn):
+    """Live elapsed time, e.g. `12s` or `1m 05s`."""
+
+    def render(self, task: Task) -> Text:
+        return Text(format_duration(task.elapsed or 0), style="cyan")
+
+
 class ConsoleReporter(Reporter):
     def __init__(self, console: Console | None = None, verbose: bool = False) -> None:
         self.console = console or Console(highlight=False)
         self.verbose = verbose
         self._runs = 0
+        self._model = ""
 
     def _row(self, label: str, value: object, style: str = "bold") -> None:
         self.console.print(f"{label:<{LABEL_WIDTH}}[{style}]{str(value):>{VALUE_WIDTH}}[/]")
@@ -67,10 +82,24 @@ class ConsoleReporter(Reporter):
         self.console.print(f"[dim]  project  {escape(root)} ({project.toolchain.describe()})[/]")
         self.console.print(f"[dim]  tests    [/][dim]{tests}[/]")
         self.console.print(f"[dim]  model    {escape(report.model)}[/]\n")
+        self._model = report.model
 
     @contextmanager
     def activity(self, message: str) -> Iterator[None]:
-        with self.console.status(f"[dim]{escape(message)}...[/]", spinner="dots"):
+        """A spinner with a live elapsed-time counter, cleared when the work is done."""
+        if not self.console.is_terminal:
+            # Nothing to animate in a log or pipe, and Live would leave blank lines behind.
+            yield
+            return
+        progress = Progress(
+            SpinnerColumn("dots"),
+            TextColumn("[dim]{task.description}...[/]"),
+            ElapsedColumn(),
+            console=self.console,
+            transient=True,
+        )
+        with progress:
+            progress.add_task(escape(message), total=None)
             yield
 
     def baseline(self, stage: Stage, exists: bool) -> None:
@@ -134,6 +163,10 @@ class ConsoleReporter(Reporter):
         self.console.print()
 
     def _explain(self, stage: Stage) -> None:
+        attempts = f" · {stage.attempts} attempts" if stage.attempts > 1 else ""
+        self.console.print(
+            f"[dim]Written by {escape(self._model)} in {format_duration(stage.llm_seconds)}{attempts}[/]"
+        )
         if self.verbose and stage.summary:
             self.console.print(f"[dim]{escape(stage.summary)}[/]")
 
@@ -250,3 +283,4 @@ def _display_path(path: Path) -> str:
         return os.path.relpath(path) if path.is_relative_to(Path.cwd()) else str(path)
     except ValueError:
         return str(path)
+
