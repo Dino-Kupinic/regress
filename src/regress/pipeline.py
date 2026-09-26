@@ -143,7 +143,7 @@ class Pipeline:
             with self.reporter.activity("Running existing tests"):
                 result = run_vitest(self.project, self.run_dir / "vitest", "baseline", self.options.vitest_timeout)
             if result.total > 0 and not result.success:
-                failing = [t.full_name for t in result.failed][:10] or result.suite_errors[:1]
+                failing = [t.full_name for t in result.failed][:10] or (result.suite_errors + result.run_errors)[:1]
                 raise RegressError(
                     f"The existing tests in {self.project.test_rel} do not pass. Fix them first.\n"
                     + "\n".join(f"  - {item}" for item in failing)

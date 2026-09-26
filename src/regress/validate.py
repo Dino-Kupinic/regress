@@ -96,8 +96,14 @@ def check_candidate(
     for error in result.suite_errors:
         problems.append("The test file failed to load:\n" + _clip(error, 25))
     for test in result.failed[:MAX_REPORTED_FAILURES]:
-        message = test.failure_messages[0] if test.failure_messages else "(no message)"
+        message = _without_dependency_frames(test.failure_messages[0]) if test.failure_messages else "(no message)"
         problems.append(f'Test "{test.full_name}" fails against the current implementation:\n{_clip(message, 12)}')
+    for error in result.run_errors:
+        problems.append(
+            "Vitest reported errors outside of any single test, such as a failing beforeAll/afterAll hook or an "
+            "unhandled promise rejection (always await `expect(...).resolves` and `expect(...).rejects`):\n"
+            + _clip(error, 40)
+        )
     if len(result.failed) > MAX_REPORTED_FAILURES:
         problems.append(f"...and {len(result.failed) - MAX_REPORTED_FAILURES} more failing tests.")
     missing = sorted(required_tests - result.names)
@@ -109,6 +115,13 @@ def check_candidate(
             f"No new tests were added: the file has {result.total} tests, the previous version had {min_tests - 1}."
         )
     return Check(ok=not problems, problems=problems, result=result)
+
+
+def _without_dependency_frames(message: str) -> str:
+    """Drop stack frames in node_modules and native code: they crowd out the frame that points at the test."""
+    return "\n".join(
+        line for line in message.splitlines() if "node_modules" not in line and "(<anonymous>)" not in line
+    )
 
 
 def _clip(text: str, max_lines: int) -> str:
