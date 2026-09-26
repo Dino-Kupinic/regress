@@ -24,10 +24,16 @@ def select_mutants(run: MutationRun, limit: int, exclude: set[str] | frozenset[s
 
 
 def mutated_line(mutant: Mutant, source_lines: list[str]) -> tuple[str, str] | None:
-    """(original, mutated) text of the line a single-line mutant changes."""
-    if mutant.start_line != mutant.end_line or "\n" in mutant.replacement:
+    """(original, mutated) text of the line a single-line mutant changes.
+
+    None for multi-line mutants, and when the source no longer matches the mutant (it was edited
+    after the run that found it).
+    """
+    if mutant.start_line != mutant.end_line or "\n" in mutant.replacement or mutant.start_line > len(source_lines):
         return None
     line = source_lines[mutant.start_line - 1].rstrip("\n")
+    if line[mutant.start_column - 1 : mutant.end_column - 1] != mutant.original:
+        return None
     mutated = line[: mutant.start_column - 1] + mutant.replacement + line[mutant.end_column - 1 :]
     return line.strip(), mutated.strip()
 
