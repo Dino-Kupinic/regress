@@ -118,7 +118,7 @@ function ProjectMenu({ project }: { project?: ProjectInfo }) {
               <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground shadow-xs">
                 <LogoMark className="size-4" />
               </div>
-              <span className="flex-1 truncate text-left font-brand text-lg leading-none">
+              <span className="flex-1 truncate text-left font-brand text-2xl leading-none">
                 REGRESS
               </span>
               <ChevronsUpDown className="ml-auto text-muted-foreground" />
