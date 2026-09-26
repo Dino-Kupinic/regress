@@ -107,6 +107,7 @@ def list_sources(root: Path) -> list[SourceFile]:
         if (
             path.suffix not in SOURCE_EXTENSIONS
             or is_test_file(path)
+            or ".oracle." in path.name
             or _CONFIG_NAME.search(path.name)
             or any(part in TEST_DIRS for part in relative.parts[:-1])
         ):

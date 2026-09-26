@@ -84,7 +84,7 @@ def test_project_lists_what_blocks_a_run(tmp_path):
 
 
 def test_sources_leave_out_tests_configs_and_dependencies(client, project):
-    for name in ("src/math.test.ts", "test/other.ts", "vitest.config.ts", "src/types.d.ts", ".cache/x.ts"):
+    for name in ("src/math.test.ts", "test/other.ts", "oracle/math.oracle.ts", "vitest.config.ts", "src/types.d.ts", ".cache/x.ts"):
         (project / name).parent.mkdir(parents=True, exist_ok=True)
         (project / name).write_text("export {};\n")
     (project / "node_modules/vitest/index.js").write_text("")

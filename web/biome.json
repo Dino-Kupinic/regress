@@ -1,0 +1,15 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.14/schema.json",
+  "files": {
+    "includes": ["app/**", "*.ts", "*.json", "!**/.react-router", "!**/build"]
+  },
+  "formatter": { "indentStyle": "space", "indentWidth": 2 },
+  "javascript": { "formatter": { "quoteStyle": "double" } },
+  "css": { "parser": { "tailwindDirectives": true } },
+  "linter": {
+    "rules": {
+      "suspicious": { "noArrayIndexKey": "off" },
+      "style": { "noDescendingSpecificity": "off" }
+    }
+  }
+}

@@ -13,6 +13,7 @@ from fastapi.sse import EventSourceResponse, ServerSentEvent
 from regress import __version__
 from regress.api import project as projects
 from regress.api import results
+from regress.api.evaluations import EvalJob, EvalRequest, EvaluationManager
 from regress.api.jobs import RunHandle, RunManager
 from regress.api.schemas import (
     Artifact,
@@ -40,6 +41,7 @@ from regress.api.schemas import (
 from regress.catalog import ModelInfo, load_catalog
 from regress.config import load_settings, save_user_settings
 from regress.errors import ProjectError
+from regress.evaluation import BugSuite, EvalResult
 from regress.ui import PICKER_SIZE
 
 STREAM_INTERVAL = 0.25
@@ -54,7 +56,34 @@ def _manager(request: Request) -> RunManager:
     return request.app.state.manager
 
 
+def _evaluations(request: Request) -> EvaluationManager:
+    return request.app.state.evaluations
+
+
 Manager = Annotated[RunManager, Depends(_manager)]
+Evaluations = Annotated[EvaluationManager, Depends(_evaluations)]
+
+
+@router.get("/evaluations", tags=["evaluation"])
+def list_evaluations(evaluations: Evaluations) -> list[EvalResult]:
+    return evaluations.results()
+
+
+@router.get("/evaluations/suites", tags=["evaluation"])
+def list_evaluation_suites(evaluations: Evaluations) -> list[BugSuite]:
+    return evaluations.suites()
+
+
+@router.get("/evaluations/job", tags=["evaluation"])
+def get_evaluation_job(evaluations: Evaluations) -> EvalJob:
+    return evaluations.job()
+
+
+@router.post("/evaluations", status_code=202, tags=["evaluation"])
+def start_evaluation(request: EvalRequest, evaluations: Evaluations, manager: Manager) -> EvalJob:
+    if manager.active():
+        raise HTTPException(409, "A run is in progress. Wait for it before starting an evaluation.")
+    return evaluations.start(request.mode)
 
 
 def _run(run_id: str, manager: Manager) -> RunHandle:
@@ -178,11 +207,13 @@ def list_runs(
 
 
 @router.post("/runs", status_code=202, tags=["runs"])
-def start_run(request: RunRequest, manager: Manager, response: Response) -> RunDetail:
+def start_run(request: RunRequest, manager: Manager, response: Response, evaluations: Evaluations) -> RunDetail:
     """Start a run in the background and return at once. Follow it with the events stream or by polling.
 
     Only one run goes at a time: another start is refused with 409 until it is over.
     """
+    if evaluations.job().status == "running":
+        raise HTTPException(409, "An evaluation is in progress. Wait for it before starting a run.")
     job = manager.start(request)
     response.headers["Location"] = f"/api/runs/{job.id}"
     return _detail(manager.lookup(job.id))

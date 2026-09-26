@@ -16,6 +16,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from regress import __version__
+from regress.api.evaluations import EvaluationManager
 from regress.api.jobs import LLMFactory, RunManager
 from regress.api.routes import router
 from regress.api.schemas import ErrorBody
@@ -41,11 +42,13 @@ def create_app(
     """
     project_root = find_project_root((root or Path.cwd()).expanduser().resolve())
     manager = RunManager(project_root, llm_factory)
+    evaluations = EvaluationManager(project_root)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         yield
         await anyio.to_thread.run_sync(manager.shutdown)  # restores the test file of a run in progress
+        await anyio.to_thread.run_sync(evaluations.shutdown)
 
     app = FastAPI(
         title="Regress",
@@ -58,6 +61,7 @@ def create_app(
         generate_unique_id_function=_operation_id,
     )
     app.state.manager = manager
+    app.state.evaluations = evaluations
     app.include_router(router)
     app.add_exception_handler(RegressError, _regress_error)
     # The last one added runs first: check the Host header, answer CORS preflights, then refuse cross-site writes.
