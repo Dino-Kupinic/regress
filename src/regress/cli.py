@@ -13,7 +13,7 @@ from rich.table import Table
 
 from regress.config import CONFIG_FILE, CONFIG_TEMPLATE, load_settings
 from regress.errors import RegressError, ToolError
-from regress.evaluation import EvalResult, evaluate_oracles, evaluate_regress, load_suites, to_markdown
+from regress.evaluation import EvalResult, evaluate_oracles, evaluate_regress, load_suites
 from regress.llm import OpenAILLM
 from regress.pipeline import Pipeline, RunOptions
 from regress.process import run_command
@@ -272,4 +272,5 @@ def _render_eval(result: EvalResult) -> None:
         for stage in module.stages:
             if result.mode == "oracle" and stage.label == "Oracle" and stage.missed:
                 console.print(f"[yellow]{module.module}: oracle misses hidden bug(s) {', '.join(stage.missed)}[/]")
-    console.print(f"\n[dim]{escape(to_markdown(result).splitlines()[0][2:])} saved under .regress/eval/[/]")
+    if result.output_dir:
+        console.print(f"\n[dim]Results saved to {escape(result.output_dir)} (eval.md, eval.json)[/]")

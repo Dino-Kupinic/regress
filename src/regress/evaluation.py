@@ -70,6 +70,7 @@ class EvalResult(BaseModel):
     model: str | None = None
     rounds: int | None = None
     modules: list[ModuleResult] = Field(default_factory=list)
+    output_dir: str | None = None
 
     @property
     def stage_labels(self) -> list[str]:
@@ -290,5 +291,6 @@ def _keep_artifacts(store: RunStore, destination: Path) -> None:
 
 
 def _save(result: EvalResult, out_dir: Path) -> None:
+    result.output_dir = str(out_dir)
     (out_dir / "eval.json").write_text(result.model_dump_json(indent=2))
     (out_dir / "eval.md").write_text(to_markdown(result))
