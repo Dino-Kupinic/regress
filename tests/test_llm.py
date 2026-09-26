@@ -81,28 +81,83 @@ def test_streams_structured_output_without_storage_and_reports_progress():
     call = responses.calls[0]
     assert call["text_format"] is TestFileProposal
     assert call["store"] is False
-    assert call["reasoning"] == {"effort": "high"}
+    assert call["reasoning"] == {"effort": "high", "summary": "auto"}
     assert (call["model"], call["instructions"], call["input"]) == ("gpt-test", "INSTRUCTIONS", "PROMPT")
-    assert statuses == ["waiting for a response", "started", "thinking", "writing", "writing ~1,000 tokens"]
+    assert statuses == [
+        "waiting for OpenAI to start",
+        "thinking",
+        "thinking",
+        "writing",
+        "writing ~1,000 tokens",
+        "writing ~1,000 tokens",  # every event reports, so the caller knows the stream is alive
+    ]
     assert (completion.proposal, completion.input_tokens, completion.output_tokens) == (PROPOSAL, 12, 34)
 
 
-def test_a_stalled_stream_is_retried_once_with_a_warning():
+def test_a_stalled_stream_is_retried_with_a_warning_naming_the_phase():
     stalled = FakeStream(healthy_events()[:2], error=httpx.ReadTimeout("idle"))
-    llm, responses = llm_with(stalled, FakeStream(healthy_events(), completed()), idle_timeout=300)
+    llm, responses = llm_with(stalled, FakeStream(healthy_events(), completed()), idle_timeout=120)
     warnings: list[str] = []
     completion = llm.propose("i", "p", on_warning=warnings.append)
 
     assert completion.proposal == PROPOSAL
-    assert warnings == ["gpt-test sent nothing for 5m 00s. Retrying (2/2)."]
+    assert warnings == ["gpt-test stopped sending data while thinking (2m 00s of silence). Retrying (attempt 2 of 3)."]
     assert len(responses.calls) == 2
 
 
-def test_gives_up_after_the_retry():
+def test_gives_up_after_three_attempts_with_advice():
     timeout = openai.APITimeoutError(request=httpx.Request("POST", "https://api.openai.com/v1/responses"))
-    llm, _ = llm_with(timeout, timeout, idle_timeout=120)
-    with pytest.raises(LLMError, match=r"sent nothing for 2m 00s\. Gave up after 2 attempts"):
+    llm, responses = llm_with(timeout, timeout, timeout, idle_timeout=120)
+    warnings: list[str] = []
+    with pytest.raises(LLMError) as error:
+        llm.propose("i", "p", on_warning=warnings.append)
+
+    message = str(error.value)
+    assert message.startswith("OpenAI did not start a response within 2m 00s. Gave up after 3 attempts.")
+    assert "try again later" in message and "llm_timeout" in message
+    assert len(warnings) == 2 and len(responses.calls) == 3
+
+
+def test_shows_the_reasoning_summary_headline_while_thinking():
+    events = [
+        SimpleNamespace(type="response.created"),
+        SimpleNamespace(type="response.output_item.added", item=SimpleNamespace(type="reasoning")),
+        SimpleNamespace(type="response.reasoning_summary_part.added"),
+        SimpleNamespace(type="response.reasoning_summary_text.delta", delta="**Checking array"),
+        SimpleNamespace(type="response.reasoning_summary_text.delta", delta=" merges**\n\nI need to see how"),
+        SimpleNamespace(type="response.reasoning_summary_part.added"),
+        SimpleNamespace(type="response.reasoning_summary_text.delta", delta="**Planning edge cases**"),
+    ]
+    llm, _ = llm_with(FakeStream(events, completed()))
+    statuses: list[str] = []
+    llm.propose("i", "p", on_status=statuses.append)
+    assert "thinking: Checking array merges" in statuses
+    assert statuses[-1] == "thinking: Planning edge cases"
+
+
+def test_falls_back_when_reasoning_summaries_are_not_supported():
+    request = httpx.Request("POST", "https://api.openai.com/v1/responses")
+    unsupported = openai.BadRequestError(
+        "Unsupported parameter: 'reasoning.summary' is not supported with this model.",
+        response=httpx.Response(400, request=request),
+        body=None,
+    )
+    llm, responses = llm_with(unsupported, FakeStream(healthy_events(), completed()))
+    assert llm.propose("i", "p").proposal == PROPOSAL
+    assert responses.calls[0]["reasoning"] == {"summary": "auto"}
+    assert "reasoning" not in responses.calls[1]
+    assert llm.summaries is False
+
+
+def test_other_bad_requests_are_not_retried():
+    request = httpx.Request("POST", "https://api.openai.com/v1/responses")
+    bad = openai.BadRequestError(
+        "Invalid schema for response_format", response=httpx.Response(400, request=request), body=None
+    )
+    llm, responses = llm_with(bad)
+    with pytest.raises(LLMError, match="rejected the request: Invalid schema"):
         llm.propose("i", "p")
+    assert len(responses.calls) == 1
 
 
 def test_failed_and_incomplete_responses_explain_why():
@@ -253,10 +308,12 @@ def test_real_sdk_parses_a_streamed_response():
 
     assert completion.proposal == PROPOSAL
     assert (completion.input_tokens, completion.output_tokens) == (10, 20)
-    assert statuses[:4] == ["waiting for a response", "started", "thinking", "writing"]
+    assert statuses[0] == "waiting for OpenAI to start"
+    assert statuses.index("thinking") < statuses.index("writing")
     assert statuses[-1].startswith("writing ~")
     body = json.loads(requests[0].content)
     assert body["stream"] is True and body["store"] is False
+    assert body["reasoning"] == {"summary": "auto"}
     assert body["text"]["format"]["type"] == "json_schema"
 
 
@@ -267,10 +324,10 @@ def test_real_sdk_stalls_are_retried():
         StallingStream(sse(*events[:3])),
         sse(*events),
     )
-    llm.retries = 2
     warnings: list[str] = []
     completion = llm.propose("i", "p", on_warning=warnings.append)
 
     assert completion.proposal == PROPOSAL
     assert len(requests) == 3
-    assert len(warnings) == 2 and all("sent nothing" in w for w in warnings)
+    assert warnings[0].startswith("OpenAI did not start a response within")
+    assert warnings[1].startswith("gpt-test stopped sending data while thinking")

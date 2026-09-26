@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import time
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from pathlib import Path
@@ -72,6 +73,20 @@ class ElapsedColumn(ProgressColumn):
         return Text(format_duration(task.elapsed or 0), style="cyan")
 
 
+QUIET_AFTER_SECONDS = 20
+
+
+class QuietColumn(ProgressColumn):
+    """How long nothing has arrived, once that is unusual: makes a stalled request visible."""
+
+    def render(self, task: Task) -> Text:
+        since = task.fields.get("since")
+        quiet = time.monotonic() - since if since is not None else 0
+        if quiet < QUIET_AFTER_SECONDS:
+            return Text("")
+        return Text(f"· quiet for {format_duration(quiet)}", style="yellow")
+
+
 class ConsoleReporter(Reporter):
     def __init__(self, console: Console | None = None, verbose: bool = False) -> None:
         self.console = console or Console(highlight=False)
@@ -103,13 +118,15 @@ class ConsoleReporter(Reporter):
             SpinnerColumn("dots"),
             TextColumn("[dim]{task.description}{task.fields[status]}...[/]"),
             ElapsedColumn(),
+            QuietColumn(),
             console=self.console,
             transient=True,
         )
-        task = progress.add_task(escape(message), total=None, status="")
+        task = progress.add_task(escape(message), total=None, status="", since=None)
 
         def set_status(text: str) -> None:
-            progress.update(task, status=f" · {escape(text)}" if text else "")
+            # Each call means data arrived, which resets the quiet counter.
+            progress.update(task, status=f" · {escape(text)}" if text else "", since=time.monotonic())
 
         with progress:
             yield set_status
