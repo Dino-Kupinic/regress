@@ -102,12 +102,12 @@ def user_settings() -> dict[str, object]:
 
 
 def save_user_settings(**values: object) -> Path:
-    """Update keys in the user config, keeping the ones already there."""
+    """Update keys in the user config, keeping the ones already there. A value of None removes the key."""
     path = user_config_path()
-    data = {**_read_toml(path), **values}
+    data = {key: value for key, value in {**_read_toml(path), **values}.items() if value is not None}
     _validate(data, str(path))
     path.parent.mkdir(parents=True, exist_ok=True)
-    lines = [f"{key} = {_toml_value(value)}\n" for key, value in data.items() if value is not None]
+    lines = [f"{key} = {_toml_value(value)}\n" for key, value in data.items()]
     path.write_text(USER_CONFIG_HEADER + "".join(lines))
     return path
 

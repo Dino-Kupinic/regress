@@ -267,6 +267,45 @@ def models(
         _fail(error)
 
 
+@app.command()
+def serve(
+    path: Annotated[Path, typer.Argument(help="Project directory (must contain package.json).")] = Path("."),
+    host: Annotated[
+        str, typer.Option(help="Address to listen on. The API has no authentication, so keep it local.")
+    ] = "127.0.0.1",
+    port: Annotated[int, typer.Option(help="Port to listen on.")] = 8765,
+    origins: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--origin",
+            help="Browser origin allowed to call the API (repeatable). Defaults to Vite's dev server on port 5173.",
+        ),
+    ] = None,
+) -> None:
+    """Serve the HTTP API for the web app."""
+    import uvicorn
+
+    from regress.api import DEV_ORIGINS, LOCAL_HOSTS, create_app
+
+    url_host = f"[{host}]" if ":" in host else host  # an IPv6 address
+    try:
+        root = find_project_root(path.expanduser().resolve())
+        api = create_app(root, origins=origins or DEV_ORIGINS, hosts=[*LOCAL_HOSTS, url_host])
+    except RegressError as error:
+        _fail(error)
+    base = f"http://{url_host}:{port}/api"
+    console.print(f"[bold]regress serve[/] [dim]{escape(str(root))}[/]\n")
+    console.print(f"  API   {base}")
+    console.print(f"  Docs  {base}/docs")
+    console.print(f"[dim]  Allowed browser origins: {', '.join(origins or DEV_ORIGINS)}[/]\n")
+    if url_host not in LOCAL_HOSTS:
+        console.print(
+            "[yellow]! The API has no authentication: anyone who can reach it can read your code "
+            "and spend your OpenAI credits.[/]\n"
+        )
+    uvicorn.run(api, host=host, port=port, timeout_graceful_shutdown=3)
+
+
 @app.command("eval")
 def eval_command(
     examples: Annotated[Path, typer.Argument(help="Examples project with a hidden-bugs/ directory.")] = Path(
