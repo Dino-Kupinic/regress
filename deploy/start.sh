@@ -2,6 +2,12 @@
 set -euo pipefail
 
 : "${REGRESS_PUBLIC_ORIGIN:?Set REGRESS_PUBLIC_ORIGIN to the app HTTPS origin}"
+: "${REGRESS_BASIC_AUTH_USER:?Set REGRESS_BASIC_AUTH_USER}"
+: "${REGRESS_BASIC_AUTH_PASSWORD:?Set REGRESS_BASIC_AUTH_PASSWORD}"
+
+umask 077
+password_hash="$(printf '%s' "$REGRESS_BASIC_AUTH_PASSWORD" | openssl passwd -apr1 -stdin)"
+printf '%s:%s\n' "$REGRESS_BASIC_AUTH_USER" "$password_hash" > /etc/nginx/.htpasswd
 
 mkdir -p /data/project
 if [[ ! -f /data/project/package.json ]]; then
