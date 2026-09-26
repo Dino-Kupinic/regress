@@ -2,7 +2,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, Copy, Download } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import {
-  Link,
   useLoaderData,
   useNavigate,
   useParams,
@@ -69,11 +68,6 @@ export default function RunPage() {
   return (
     <div className="page run-page">
       <div className="run-header">
-        <div className="breadcrumb">
-          <Link to="/runs">Runs</Link>
-          <span>/</span>
-          <span className="mono">{run.summary.id}</span>
-        </div>
         <div className="row between run-title">
           <div className="row gap-md">
             <h1 className="mono">{run.summary.source_file}</h1>

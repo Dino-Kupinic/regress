@@ -11,5 +11,19 @@
       "suspicious": { "noArrayIndexKey": "off" },
       "style": { "noDescendingSpecificity": "off" }
     }
-  }
+  },
+  "overrides": [
+    {
+      "includes": ["app/components/ui/**"],
+      "linter": {
+        "rules": {
+          "a11y": {
+            "useFocusableInteractive": "off",
+            "useSemanticElements": "off"
+          },
+          "suspicious": { "noDocumentCookie": "off" }
+        }
+      }
+    }
+  ]
 }

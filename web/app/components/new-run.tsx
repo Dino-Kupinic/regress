@@ -14,8 +14,11 @@ import { Input } from "~/components/ui/input";
 import { api, type ProjectInfo } from "~/lib/api";
 import { fileName } from "~/lib/utils";
 
-type DrawerContext = { open: (source?: string) => void };
-const Context = createContext<DrawerContext>({ open: () => undefined });
+type DrawerContext = { open: (source?: string) => void; opened: boolean };
+const Context = createContext<DrawerContext>({
+  open: () => undefined,
+  opened: false,
+});
 export const useNewRun = () => useContext(Context);
 
 export function NewRunProvider({
@@ -92,7 +95,7 @@ export function NewRunProvider({
     ) ?? [];
   const command = `regress run ${source || "<source>"}${baseline ? " --baseline" : ""}${!generate ? " --no-generate" : ""} --rounds ${rounds} --yes`;
   return (
-    <Context.Provider value={{ open }}>
+    <Context.Provider value={{ open, opened }}>
       {children}
       {opened && (
         <div className="drawer-layer">
@@ -131,6 +134,7 @@ export function NewRunProvider({
                   <Search size={16} />
                   <Input
                     id="source-search"
+                    className="pl-9"
                     aria-label="Search source files"
                     placeholder="Search files"
                     value={search}
