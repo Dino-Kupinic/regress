@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import threading
 import time
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager, nullcontext
@@ -74,6 +75,7 @@ class ElapsedColumn(ProgressColumn):
 
 
 QUIET_AFTER_SECONDS = 20
+ACTIVITY_HEARTBEAT_SECONDS = 30
 
 
 class QuietColumn(ProgressColumn):
@@ -109,10 +111,36 @@ class ConsoleReporter(Reporter):
 
     @contextmanager
     def activity(self, message: str) -> Iterator[Callable[[str], None]]:
-        """A spinner with a live status and elapsed-time counter, cleared when the work is done."""
+        """Show a live spinner in terminals and periodic progress in captured output."""
         if not self.console.is_terminal:
-            # Nothing to animate in a log or pipe, and Live would leave blank lines behind.
-            yield _ignore_status
+            self.console.print(f"[dim]{escape(message)}...[/]")
+            started = last_event = time.monotonic()
+            status = ""
+            stop = threading.Event()
+
+            def set_status(text: str) -> None:
+                nonlocal last_event, status
+                status = text
+                last_event = time.monotonic()
+
+            def heartbeat() -> None:
+                while not stop.wait(ACTIVITY_HEARTBEAT_SECONDS):
+                    now = time.monotonic()
+                    detail = f" · {escape(status)}" if status else ""
+                    quiet = now - last_event
+                    if quiet >= QUIET_AFTER_SECONDS:
+                        detail += f" · quiet for {format_duration(quiet)}"
+                    self.console.print(
+                        f"[dim]Still {escape(message.lower())}{detail} · {format_duration(now - started)} elapsed[/]"
+                    )
+
+            thread = threading.Thread(target=heartbeat, daemon=True)
+            thread.start()
+            try:
+                yield set_status
+            finally:
+                stop.set()
+                thread.join()
             return
         progress = Progress(
             SpinnerColumn("dots"),
