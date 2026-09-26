@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import shutil
 import sys
 from pathlib import Path
 from typing import Annotated, Literal, NoReturn
@@ -30,11 +29,11 @@ from regress.project import (
     REQUIRED_PACKAGES,
     VITEST_INSTALL_SPEC,
     find_project_root,
-    install_specs,
+    install_command,
     load_project,
     major,
-    missing_packages,
     package_version,
+    planned_installs,
 )
 from regress.store import RunStore, regress_dir
 from regress.ui import (
@@ -197,7 +196,7 @@ def init(
     try:
         root = find_project_root(path.expanduser().resolve())
         console.print(f"[bold]regress init[/] [dim]{escape(str(root))}[/]\n")
-        installs = install_specs(missing_packages(root))
+        installs = planned_installs(root)
         for name in REQUIRED_PACKAGES:
             version = package_version(root, name)
             mark = "[green]✓[/]" if version else "[yellow]✗[/]"
@@ -207,9 +206,8 @@ def init(
             console.print(
                 f"[yellow]  vitest {vitest} breaks Stryker's Vitest runner; Regress needs {VITEST_INSTALL_SPEC}.[/]"
             )
-            installs.append(VITEST_INSTALL_SPEC)
         if installs:
-            command = _install_command(root, installs)
+            command = install_command(root, installs)
             console.print(f"\nMissing: {' '.join(installs)}")
             if not yes and not typer.confirm(f"Run `{' '.join(command)}`?", default=True):
                 raise RegressError("Dependencies not installed. Install them yourself, then run `regress init` again.")
@@ -230,20 +228,6 @@ def init(
         console.print("\nNext: [bold]regress run src/<file>.ts[/]")
     except RegressError as error:
         _fail(error)
-
-
-def _install_command(root: Path, packages: list[str]) -> list[str]:
-    lockfiles = {
-        "bun.lock": ["bun", "add", "-d"],
-        "bun.lockb": ["bun", "add", "-d"],
-        "pnpm-lock.yaml": ["pnpm", "add", "-D"],
-        "yarn.lock": ["yarn", "add", "-D"],
-        "package-lock.json": ["npm", "install", "-D"],
-    }
-    for lockfile, command in lockfiles.items():
-        if (root / lockfile).exists():
-            return [*command, *packages]
-    return ["bun", "add", "-d", *packages] if shutil.which("bun") else ["npm", "install", "-D", *packages]
 
 
 @app.command()

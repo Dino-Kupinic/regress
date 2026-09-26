@@ -61,9 +61,10 @@ class Pipeline:
         self._mutation_runs = 0
         self._llm_calls = 0
 
-    def run(self) -> RunReport:
+    def run(self, run_dir: Path | None = None) -> RunReport:
+        """Run the whole loop. `run_dir` is an empty directory created in advance, e.g. to hand out the ID early."""
         started = time.monotonic()
-        self.run_dir = self.store.create(self.project.source)
+        self.run_dir = run_dir or self.store.create(self.project.source)
         self.workspace = Workspace(self.project)
         self.report = RunReport(
             id=self.run_dir.name,
@@ -80,7 +81,7 @@ class Pipeline:
             kept = self._run()
             self.report.status = "completed"
         except BaseException as error:
-            self.report.status = "failed"
+            self.report.status = "cancelled" if isinstance(error, KeyboardInterrupt) else "failed"
             if isinstance(error, KeyboardInterrupt):
                 self.report.error = "Interrupted"
             elif isinstance(error, RegressError):

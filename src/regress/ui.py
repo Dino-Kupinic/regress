@@ -203,7 +203,9 @@ class ConsoleReporter(Reporter):
 
 
 def render_report(report: RunReport, run_dir: Path, console: Console, show_mutants: int = 10) -> None:
-    status = {"completed": "[green]completed[/]", "failed": "[red]failed[/]"}.get(report.status, report.status)
+    status = {"completed": "[green]completed[/]", "failed": "[red]failed[/]", "cancelled": "[yellow]cancelled[/]"}.get(
+        report.status, report.status
+    )
     console.print(f"[bold]regress report[/] [dim]{report.id}[/]\n")
     console.print(f"[dim]Source   [/]{escape(report.source_file)}")
     console.print(f"[dim]Tests    [/]{escape(report.test_file)}")

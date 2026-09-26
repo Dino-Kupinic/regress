@@ -131,6 +131,7 @@ class MutationRun(BaseModel):
 
 
 StageKind = Literal["baseline", "generated", "improved"]
+RunStatus = Literal["running", "completed", "failed", "cancelled"]
 
 
 class Stage(BaseModel):
@@ -174,7 +175,7 @@ class RunReport(BaseModel):
     test_file: str
     test_file_existed: bool
     model: str
-    status: Literal["running", "completed", "failed"] = "running"
+    status: RunStatus = "running"
     error: str | None = None
     stages: list[Stage] = Field(default_factory=list)
     kept_stage: str | None = None

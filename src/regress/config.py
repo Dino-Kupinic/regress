@@ -96,6 +96,11 @@ def load_settings(root: Path | None, **overrides: object) -> Settings:
     return settings
 
 
+def user_settings() -> dict[str, object]:
+    """The keys set in the user config, as written there."""
+    return _read_toml(user_config_path())
+
+
 def save_user_settings(**values: object) -> Path:
     """Update keys in the user config, keeping the ones already there."""
     path = user_config_path()
