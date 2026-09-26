@@ -118,14 +118,9 @@ function ProjectMenu({ project }: { project?: ProjectInfo }) {
               <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground shadow-xs">
                 <LogoMark className="size-4" />
               </div>
-              <div className="grid flex-1 gap-0.5 text-left leading-tight">
-                <span className="truncate font-brand text-lg leading-none">
-                  REGRESS
-                </span>
-                <span className="truncate font-mono text-xs text-muted-foreground">
-                  {project?.name ?? "Connecting…"}
-                </span>
-              </div>
+              <span className="flex-1 truncate text-left font-brand text-lg leading-none">
+                REGRESS
+              </span>
               <ChevronsUpDown className="ml-auto text-muted-foreground" />
             </SidebarMenuButton>
           </DropdownMenuTrigger>
