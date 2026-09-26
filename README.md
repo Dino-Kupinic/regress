@@ -70,7 +70,7 @@ Improvement         +47%
 ✓ Kept improved tests in test/cart.test.ts
 ```
 
-This output is from a run with a scripted model. See [Evaluation](#evaluation) for real-model numbers. While Regress waits on the model, Vitest or Stryker, a spinner shows the elapsed time (`Improving tests with gpt-5.5... 42s`).
+This output is from a run with a scripted model. See [Evaluation](#evaluation) for real-model numbers. While Regress waits on the model, Vitest or Stryker, a spinner shows the elapsed time (`Improving tests with gpt-6-luna... 42s`).
 
 Useful flags for `regress run`:
 
@@ -86,15 +86,14 @@ Useful flags for `regress run`:
 
 ### Choosing a model
 
-Before each run, Regress lists the newest models your API key can use and asks which one should write the tests. Press Enter to keep the default. The list comes from the OpenAI API, is cached for a day, and falls back to the list bundled with the `openai` SDK when the API is unreachable. It only shows text models (no audio, realtime, image or embedding models), but any model your key has can be typed by name.
+Before each run, Regress lists the newest models your API key can use and asks which one should write the tests. Press Enter to keep the default, `gpt-6-luna` unless you change it. The list comes from the OpenAI API, is cached for a day, and falls back to the list bundled with the `openai` SDK when the API is unreachable. It only shows text models (no audio, realtime, image or embedding models), but any model your key has can be typed by name.
 
 ```text
 Which model should write the tests? (fetched from the OpenAI API just now)
-   1  gpt-6-luna              2026-09-14  newest
+   1  gpt-6-luna              2026-09-14  newest, default
    2  gpt-6-sol               2026-09-14
    ...
-   8  gpt-5.5                 2026-04-22  default
-Model (number or name) (gpt-5.5): 2
+Model (number or name) (gpt-6-luna): 2
 Remember gpt-6-sol and stop asking? [y/n] (n): y
 ```
 
@@ -162,7 +161,7 @@ Settings are read in this order, with later sources winning:
 Both files accept the same keys:
 
 ```toml
-# model = "gpt-5.5"   # in regress.toml this pins the model for everyone on the project
+# model = "gpt-6-luna"   # in regress.toml this pins the model for everyone on the project
 ask_model = true      # ask which model to use before each run
 # reasoning_effort = "medium"
 rounds = 1

@@ -11,12 +11,12 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, ValidationError
 from regress.errors import ProjectError
 
 CONFIG_FILE = "regress.toml"
-DEFAULT_MODEL = "gpt-5.5"
+DEFAULT_MODEL = "gpt-6-luna"
 
 CONFIG_TEMPLATE = """\
 # Regress configuration for this project. Command-line flags override these values.
 
-# model = "gpt-5.5"   # pin a model for everyone on this project (overrides your personal default)
+# model = "gpt-6-luna"   # pin a model for everyone on this project (overrides your personal default)
 # reasoning_effort = "medium"  # for reasoning models (env: REGRESS_REASONING_EFFORT)
 rounds = 1            # improvement rounds driven by surviving mutants
 max_repairs = 2       # retries when a generated test file fails validation

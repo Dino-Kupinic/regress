@@ -23,7 +23,7 @@ from regress.catalog import (
     sdk_models,
     usable,
 )
-from regress.config import load_settings, save_user_settings, user_cache_dir, user_config_path
+from regress.config import DEFAULT_MODEL, load_settings, save_user_settings, user_cache_dir, user_config_path
 from regress.ui import choose_model, format_duration
 
 API_MODELS = [
@@ -238,22 +238,22 @@ def picker_calls(monkeypatch):
 
 def test_asks_and_remembers_the_choice(tmp_path, picker_calls):
     assert cli._pick_model(load_settings(tmp_path), yes=False) == "gpt-6-sol"
-    assert picker_calls == ["gpt-5.5"]
+    assert picker_calls == [DEFAULT_MODEL]
 
     remembered = load_settings(tmp_path)
     assert (remembered.model, remembered.ask_model) == ("gpt-6-sol", False)
     assert cli._pick_model(remembered, yes=False) == "gpt-6-sol"
-    assert picker_calls == ["gpt-5.5"]  # not asked again
+    assert picker_calls == [DEFAULT_MODEL]  # not asked again
 
 
 def test_does_not_ask_when_told_or_when_it_cannot(tmp_path, picker_calls, monkeypatch):
-    assert cli._pick_model(load_settings(tmp_path), yes=True) == "gpt-5.5"
+    assert cli._pick_model(load_settings(tmp_path), yes=True) == DEFAULT_MODEL
     assert cli._pick_model(load_settings(tmp_path, model="gpt-5.4"), yes=False) == "gpt-5.4"
     monkeypatch.setenv("REGRESS_MODEL", "gpt-env")
     assert cli._pick_model(load_settings(tmp_path), yes=False) == "gpt-env"
     monkeypatch.delenv("REGRESS_MODEL")
     monkeypatch.setattr(cli, "_interactive", lambda: False)
-    assert cli._pick_model(load_settings(tmp_path), yes=False) == "gpt-5.5"
+    assert cli._pick_model(load_settings(tmp_path), yes=False) == DEFAULT_MODEL
     assert picker_calls == []
 
 
