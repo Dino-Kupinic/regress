@@ -8,6 +8,8 @@ set -euo pipefail
 umask 077
 password_hash="$(printf '%s' "$REGRESS_BASIC_AUTH_PASSWORD" | openssl passwd -apr1 -stdin)"
 printf '%s:%s\n' "$REGRESS_BASIC_AUTH_USER" "$password_hash" > /etc/nginx/.htpasswd
+chgrp www-data /etc/nginx/.htpasswd
+chmod 640 /etc/nginx/.htpasswd
 
 mkdir -p /data/project
 if [[ ! -f /data/project/package.json ]]; then
