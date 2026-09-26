@@ -357,7 +357,7 @@ def _render_eval(result: EvalResult) -> None:
             cells += (
                 ["—", "—"] if stage is None else [format_score(stage.score), f"{len(stage.caught)}/{stage.bugs_total}"]
             )
-        name = module.module + (" [red](error)[/]" if module.error else "")
+        name = escape(module.module) + (" [red](error)[/]" if module.error else "")
         table.add_row(name, *cells)
     totals: list[str] = []
     for label in labels:
@@ -371,6 +371,7 @@ def _render_eval(result: EvalResult) -> None:
             console.print(f"[red]{escape(module.module)}:[/] {escape(module.error)}")
         for stage in module.stages:
             if result.mode == "oracle" and stage.label == "Oracle" and stage.missed:
-                console.print(f"[yellow]{module.module}: oracle misses hidden bug(s) {', '.join(stage.missed)}[/]")
+                missed = ", ".join(stage.missed)
+                console.print(f"[yellow]{escape(module.module)}: oracle misses hidden bug(s) {escape(missed)}[/]")
     if result.output_dir:
         console.print(f"\n[dim]Results saved to {escape(result.output_dir)} (eval.md, eval.json)[/]")

@@ -102,7 +102,7 @@ class ConsoleReporter(Reporter):
     def start(self, project: Project, report: RunReport) -> None:
         self.console.print("[bold]regress[/]\n")
         self.console.print(f"Analyzing [bold]{escape(project.source_rel)}[/]...")
-        tests = project.test_rel + ("" if report.test_file_existed else " [dim](will be created)[/]")
+        tests = escape(project.test_rel) + ("" if report.test_file_existed else " [dim](will be created)[/]")
         root = _display_path(project.root)
         self.console.print(f"[dim]  project  {escape(root)} ({project.toolchain.describe()})[/]")
         self.console.print(f"[dim]  tests    [/][dim]{tests}[/]")
@@ -325,8 +325,8 @@ def render_run_list(reports: list[tuple[RunReport, Path]], console: Console) -> 
         reference, kept = report.reference, report.kept
         delta = report.improvement
         table.add_row(
-            report.id,
-            report.source_file,
+            escape(report.id),
+            escape(report.source_file),
             report.status,
             format_score(reference.score if reference else None),
             format_score(kept.score if kept else None),
