@@ -34,6 +34,7 @@ regress init                 # check the project, install Vitest + Stryker, writ
 regress run src/cart.ts      # pick a model, generate, mutation-test, improve, compare
 regress report               # show the latest run (or: --list, <run-id>, --json)
 regress models               # list the latest models, set your default
+regress serve                # HTTP API for the web app on http://127.0.0.1:8765/api
 ```
 
 ```text
@@ -144,6 +145,7 @@ Each run writes `.regress/runs/<timestamp>-<name>/`. The directory ignores itsel
 | Path | Contents |
 |---|---|
 | `report.json` | Stages, test counts, every mutant with its status, token usage |
+| `events.jsonl` | Progress log, for runs started over the [HTTP API](#http-api) |
 | `tests/` | Each accepted version of the test file |
 | `llm/` | Every prompt and structured response |
 | `stryker/`, `vitest/` | Tool configs, JSON reports and logs |
@@ -168,6 +170,71 @@ rounds = 1
 max_repairs = 2
 max_mutants = 40
 runner = "auto"       # "bun", "npx" or "auto"
+```
+
+## HTTP API
+
+`regress serve` runs a local HTTP API over the same engine, for the web app (see [frontend-stack.md](frontend-stack.md)). It serves the project that contains the given directory:
+
+```bash
+regress serve examples       # http://127.0.0.1:8765/api, interactive docs at /api/docs
+```
+
+The OpenAPI schema at `/api/openapi.json` describes every request and response, so the web app can generate its types from it (for example with `openapi-typescript`). Operation IDs are the route names: `start_run`, `get_run`, and so on.
+
+| Method | Path | What it does |
+|---|---|---|
+| `GET` | `/api/project` | The project and whether a run can start: packages, toolchain, API key, active run |
+| `POST` | `/api/project/init` | Install what's missing and write `regress.toml`, like `regress init --yes` |
+| `GET` | `/api/project/sources` | Source files a run can target |
+| `GET` | `/api/project/sources/{path}` | A source file and the test file a run would extend or create |
+| `GET` | `/api/project/files/{path}` | A JavaScript or TypeScript file's contents |
+| `GET`, `PATCH` | `/api/settings` | Settings and where each came from; `PATCH` changes your user config |
+| `GET` | `/api/models` | Models to choose from (`?refresh=true`, `?all=true`) |
+| `GET` | `/api/runs` | All runs, newest first (`?source=src/cart.ts`, `?limit=`) |
+| `POST` | `/api/runs` | Start a run. Returns `202` with the run's ID at once |
+| `GET` | `/api/runs/{id}` | Summary and report, and while it runs, what it is doing (`live`) |
+| `POST` | `/api/runs/{id}/cancel` | Stop the run and restore the test file |
+| `DELETE` | `/api/runs/{id}` | Delete a finished run's artifacts |
+| `GET` | `/api/runs/{id}/events` | The run's log. Poll with `?after=<last seq>` |
+| `GET` | `/api/runs/{id}/events/stream` | The log and live activity as server-sent events |
+| `GET` | `/api/runs/{id}/diff` | The original test file against the one the run kept |
+| `GET` | `/api/runs/{id}/stages/{n}/tests`, `…/diff`, `…/mutants` | A stage's test file, what it changed, and its mutants with the line before and after |
+| `GET` | `/api/runs/{id}/llm`, `/api/runs/{id}/llm/{name}` | Model calls with token usage, and each full prompt and response |
+| `GET` | `/api/runs/{id}/artifacts`, `…/artifacts/{path}` | Any file in the run directory |
+
+The body of `POST /api/runs` takes the options of `regress run`: `source`, `test`, `model`, `rounds`, `baseline`, `generate` and `runner`.
+
+```bash
+curl -X POST localhost:8765/api/runs -H 'content-type: application/json' \
+  -d '{"source": "src/cart.ts", "baseline": true}'
+```
+
+The run goes on in the background, one at a time: starting another returns `409` until it is over. Follow it from the browser:
+
+```ts
+const stream = new EventSource(`/api/runs/${id}/events/stream`);
+stream.addEventListener("run-event", (e) => addToLog(JSON.parse(e.data))); // RunEvent: seq, type, message, data
+stream.addEventListener("live", (e) => showActivity(JSON.parse(e.data))); // LiveState: activity, elapsed_seconds
+stream.addEventListener("end", (e) => {
+  showResult(JSON.parse(e.data)); // RunSummary
+  stream.close(); // otherwise EventSource reconnects
+});
+```
+
+Each run executes in a process of its own. Cancelling sends it SIGINT, like Ctrl-C in `regress run`: the model call, Vitest or Stryker stops at once, the test file is restored, and the run ends as `cancelled`. Stopping the server cancels a run in progress the same way.
+
+The API has no authentication, so it only works locally:
+
+- It listens on 127.0.0.1 and answers only requests addressed to a local host name, which stops DNS rebinding.
+- Browsers can call it only from allowed origins: Vite's dev server on `http://localhost:5173` by default, or those given with `--origin`. Requests from other sites that change something get `403`, including simple requests that skip the CORS preflight.
+- `OPENAI_API_KEY` stays on the server. Only JavaScript and TypeScript files outside hidden and dependency folders can be read, so `.env` is never served.
+
+In development, let Vite proxy `/api` so the browser sees a single origin:
+
+```ts
+// vite.config.ts
+export default defineConfig({ server: { proxy: { "/api": "http://127.0.0.1:8765" } } });
 ```
 
 ## Evaluation
@@ -204,7 +271,7 @@ uv run pytest -m "not integration" # fast unit tests only
 uv run ruff check . && uv run ruff format .
 ```
 
-The integration tests drive the full pipeline with a scripted model against real Vitest and Stryker. They cover improvement, repair of failing candidates, rejection with rollback, test file creation and hidden-bug checks.
+The integration tests drive the full pipeline with a scripted model against real Vitest and Stryker. They cover improvement, repair of failing candidates, rejection with rollback, test file creation, hidden-bug checks, and runs started, streamed and cancelled over HTTP.
 
 Code map (`src/regress/`):
 
@@ -221,7 +288,8 @@ Code map (`src/regress/`):
 | `ui.py` | Terminal output |
 | `store.py` | Run storage |
 | `evaluation.py` | Hidden-bug evaluation |
+| `api/` | HTTP API: app and security (`app.py`), routes, run processes (`jobs.py`), saved runs (`results.py`) |
 
 ## Scope and roadmap
 
-The MVP covers TypeScript/JavaScript with Vitest and StrykerJS, one source file and one test file at a time, in local repositories, from the CLI. Next steps: an HTTP API over the Python core, then a web UI.
+The MVP covers TypeScript/JavaScript with Vitest and StrykerJS, one source file and one test file at a time, in local repositories, from the CLI or the local HTTP API. Next step: a web UI over the API.
