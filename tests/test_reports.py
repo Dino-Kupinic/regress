@@ -1,5 +1,8 @@
+from datetime import datetime
+
 from conftest import load_fixture
 
+from regress.evaluation import EvalResult, ModuleResult, to_markdown
 from regress.models import MutantStatus, MutationRun, TestStatus
 from regress.stryker import parse_stryker_report, source_span
 from regress.vitest import parse_vitest_report
@@ -130,3 +133,12 @@ def test_source_span_handles_multiline_locations():
     assert source_span(lines, 1, 14, 3, 2) == "{\n  return 1;\n}"
     assert source_span(lines, 2, 3, 2, 11) == "return 1"
 
+
+def test_eval_markdown_keeps_multiline_errors_on_one_table_row():
+    result = EvalResult(
+        created_at=datetime.now(),
+        mode="regress",
+        modules=[ModuleResult(module="cart", error="The existing tests do not pass.\n  - a | b")],
+    )
+    row = next(line for line in to_markdown(result).splitlines() if line.startswith("| cart"))
+    assert "⚠ The existing tests do not pass. - a \\| b |" in row

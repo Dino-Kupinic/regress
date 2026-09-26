@@ -275,7 +275,9 @@ def to_markdown(result: EvalResult) -> str:
                 cells += ["—", "—"]
             else:
                 cells += [_pct(stage.score), f"{len(stage.caught)}/{stage.bugs_total}"]
-        suffix = f" ⚠ {module.error}" if module.error else ""
+        # Errors can span lines or contain pipes, either of which would break the table row.
+        error = " ".join((module.error or "").split()).replace("|", "\\|")
+        suffix = f" ⚠ {error}" if error else ""
         rows.append(f"| {module.module}{suffix} | " + " | ".join(cells) + " |")
     totals = []
     for label in labels:
