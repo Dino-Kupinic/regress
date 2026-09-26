@@ -21,7 +21,7 @@ from regress.config import (
     user_config_path,
 )
 from regress.errors import ProjectError, RegressError, ToolError
-from regress.evaluation import EvalResult, evaluate_oracles, evaluate_regress, load_suites
+from regress.evaluation import COUNTING_NOTE, EvalResult, evaluate_oracles, evaluate_regress, load_suites
 from regress.llm import OpenAILLM, require_api_key
 from regress.pipeline import Pipeline, RunOptions
 from regress.process import run_command
@@ -380,21 +380,24 @@ def _render_eval(result: EvalResult) -> None:
             cells += (
                 ["—", "—"] if stage is None else [format_score(stage.score), f"{len(stage.caught)}/{stage.bugs_total}"]
             )
-        name = escape(module.module) + (" [red](error)[/]" if module.error else "")
-        table.add_row(name, *cells)
+        marker = " [red](error)[/]" if module.error else " [yellow]*[/]" if module.note else ""
+        table.add_row(escape(module.module) + marker, *cells)
     totals: list[str] = []
-    for label in labels:
-        mean, caught, total = result.totals(label)
-        totals += [f"[bold]{format_score(mean)}[/]", f"[bold]{caught}/{total}[/]"]
-    table.add_row("[bold]All modules[/]", *totals, end_section=True)
+    for total in result.totals:
+        totals += [f"[bold]{format_score(total.score)}[/]", f"[bold]{total.caught}/{total.bugs_total}[/]"]
+    table.add_row(f"[bold]{result.totals_label}[/]", *totals, end_section=True)
     console.print()
     console.print(table)
     for module in result.modules:
         if module.error:
             console.print(f"[red]{escape(module.module)}:[/] {escape(module.error)}")
+        if module.note:
+            console.print(f"[yellow]* {escape(module.module)}:[/] {escape(module.note)}")
         for stage in module.stages:
             if result.mode == "oracle" and stage.label == "Oracle" and stage.missed:
                 missed = ", ".join(stage.missed)
                 console.print(f"[yellow]{escape(module.module)}: oracle misses hidden bug(s) {escape(missed)}[/]")
+    if len(result.counted_modules) < len(result.modules):
+        console.print(f"[dim]{COUNTING_NOTE}[/]")
     if result.output_dir:
         console.print(f"\n[dim]Results saved to {escape(result.output_dir)} (eval.md, eval.json)[/]")

@@ -12,9 +12,10 @@ from typer.testing import CliRunner
 
 from regress.cli import app
 from regress.errors import CandidateRejected, RegressError
-from regress.evaluation import hidden_bugs_caught, load_suites, sandbox
+from regress.evaluation import evaluate_regress, hidden_bugs_caught, load_suites, sandbox
 from regress.pipeline import Pipeline, RunOptions
 from regress.project import load_project
+from regress.ui import Reporter
 
 pytestmark = [pytest.mark.integration, requires_examples]
 
@@ -173,3 +174,22 @@ def test_report_command_renders_saved_runs(root):
 
     as_json = cli.invoke(app, ["report", "--json", "--project", str(root)])
     assert json.loads(as_json.output)["source_file"] == "src/cart.ts"
+
+
+def test_eval_counts_a_module_the_model_failed_as_its_existing_tests(root):
+    # Leaving the module out would total only the modules the model managed, flattering both AI columns.
+    suite = next(s for s in load_suites(root) if s.name == "cart")
+    llm = ScriptedLLM(WRONG_EXPECTATION)
+    result = evaluate_regress(root, [suite], lambda: llm, RunOptions(max_repairs=0), Reporter())
+
+    [module] = result.modules
+    assert module.error is None
+    assert "did not produce valid tests" in module.note
+    existing, one_shot, regress = module.stages
+    assert [s.label for s in module.stages] == ["Existing tests", "One-shot AI", "Regress"]
+    assert set(existing.missed) == {b.id for b in suite.bugs}  # the weak existing tests catch none
+    assert existing.score is not None and existing.score > 0
+    for ai in (one_shot, regress):
+        assert ai.model_dump(exclude={"label"}) == existing.model_dump(exclude={"label"})
+    assert result.counted_modules == ["cart"]
+    assert result.totals[1].bugs_total == len(suite.bugs)

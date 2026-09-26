@@ -250,6 +250,8 @@ regress eval examples --oracle   # validate the hidden bugs with hand-written re
 
 A bug counts as caught when any test fails with it applied. Results are saved to `examples/.regress/eval/<timestamp>/eval.md`.
 
+If the model never writes a valid test file for a module, the run keeps the existing tests. The module's One-shot AI and Regress columns then count as those existing tests, with a note, so a module the model fails on still counts against it. Totals only count modules with a result in every column, so each column adds up the same modules. A module that fails for another reason, such as an API outage, is shown with its error and left out, and the totals row says how many modules it covers.
+
 The oracle check needs no model. It confirms every hidden bug is detectable, and that the existing tests catch none of them:
 
 | Module | Existing tests score | Existing tests bugs | Oracle score | Oracle bugs |

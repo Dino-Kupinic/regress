@@ -210,9 +210,19 @@ export type EvalResult = {
     module: string;
     stages: EvalStage[];
     error: string | null;
+    note: string | null;
     run_id: string | null;
   }[];
   output_dir: string | null;
+  // Totals count only these modules, the ones with a result in every column.
+  counted_modules: string[];
+  totals: EvalTotal[];
+};
+export type EvalTotal = {
+  label: string;
+  score: number | null;
+  caught: number;
+  bugs_total: number;
 };
 export type BugSuite = {
   name: string;
