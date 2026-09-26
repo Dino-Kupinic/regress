@@ -14,6 +14,10 @@ class ToolError(RegressError):
         self.output = output
 
 
+class ToolTimeout(ToolError):
+    """An external tool ran past its time limit and was stopped."""
+
+
 class LLMError(RegressError):
     """The model call failed or returned something unusable."""
 

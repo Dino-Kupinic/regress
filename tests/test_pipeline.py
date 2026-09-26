@@ -104,6 +104,24 @@ def test_unhandled_errors_are_repaired_even_when_every_test_passes(root):
     assert project.test_file.read_text() == ONE_SHOT
 
 
+def test_a_hanging_candidate_is_repaired_instead_of_ending_the_run(root):
+    # A synchronous endless loop blocks Vitest's worker, so only the overall time limit stops it.
+    hanging = ONE_SHOT.replace(
+        "expect(cart.itemCount).toBe(5);", "while (cart.itemCount === 5) {}\n    expect(cart.itemCount).toBe(5);"
+    )
+    llm = ScriptedLLM(hanging, ONE_SHOT)
+    project, report = run(root, "src/cart.ts", llm, rounds=0, vitest_timeout=10)
+
+    assert report.status == "completed"
+    assert report.stage("generated").attempts == 2
+    assert "did not finish within 10s" in llm.prompts[1]
+    assert "in a test you added or changed" in llm.prompts[1]
+    assert project.test_file.read_text() == ONE_SHOT
+    assert (
+        "[stopped after 10s]" in (root / ".regress/runs" / report.id / "vitest/01-generated-attempt1.log").read_text()
+    )
+
+
 def test_removing_an_existing_test_is_never_accepted(root):
     llm = ScriptedLLM(DROPS_BASELINE_TEST, DROPS_BASELINE_TEST)
     project = load_project(root / "src/cart.ts")

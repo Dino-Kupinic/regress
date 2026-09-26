@@ -4,6 +4,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from regress.errors import ToolTimeout
 from regress.models import TestRunResult
 from regress.project import Project, import_specifiers, mock_specifiers, refers_to
 from regress.vitest import run_vitest
@@ -90,9 +91,16 @@ def check_candidate(
         return Check(ok=False, problems=problems)
 
     workspace.write_tests(content)
-    result = run_vitest(project, output_dir, name, timeout)
+    try:
+        result = run_vitest(project, output_dir, name, timeout)
+    except ToolTimeout:
+        # The candidate's fault, not the toolchain's: tell the model instead of ending the run.
+        result = None
     if not workspace.source_intact():
         problems.append("Running the tests modified the source file. Tests must never write to project files.")
+    if result is None:
+        problems.append(_hang_problem(timeout, changed_only=bool(required_tests)))
+        return Check(ok=False, problems=problems)
     for error in result.suite_errors:
         problems.append("The test file failed to load:\n" + _clip(error, 25))
     for test in result.failed[:MAX_REPORTED_FAILURES]:
@@ -115,6 +123,16 @@ def check_candidate(
             f"No new tests were added: the file has {result.total} tests, the previous version had {min_tests - 1}."
         )
     return Check(ok=not problems, problems=problems, result=result)
+
+
+def _hang_problem(timeout: float, changed_only: bool) -> str:
+    where = " The previous version finished, so it is in a test you added or changed." if changed_only else ""
+    return (
+        f"The tests did not finish within {timeout:.0f}s and were stopped: a test never ends.{where} "
+        "Look for loops that cannot exit, such as a loop whose exit condition depends on the code under test, "
+        "or one that waits for time to pass while vi.useFakeTimers() has frozen Date.now(). "
+        "Keep every test fast and bounded."
+    )
 
 
 def _without_dependency_frames(message: str) -> str:

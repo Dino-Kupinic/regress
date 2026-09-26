@@ -116,7 +116,8 @@ Regress doesn't ask when `--model`, `--yes`, or `REGRESS_MODEL` is given, or whe
 3. **Validate the tests.** A candidate is accepted only if all of these hold:
    - it imports the real module under test and doesn't mock it
    - it has no `.only`/`.skip`/`.todo`
-   - it passes against the original implementation in Vitest
+   - it passes against the original implementation in Vitest, with no errors outside the tests (a failing hook, an unhandled rejection)
+   - Vitest finishes within `vitest_timeout` seconds. A test that never ends is stopped and sent back like any other problem
    - every existing test survives with the same name
    - it adds at least one test
    - the source file is unchanged afterwards
@@ -171,6 +172,7 @@ max_repairs = 2
 max_mutants = 40
 runner = "auto"       # "bun", "npx" or "auto"
 llm_timeout = 120     # seconds without any data from the model before retrying
+vitest_timeout = 300  # seconds a Vitest run may take before a candidate counts as hanging
 ```
 
 ## HTTP API
