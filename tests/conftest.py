@@ -41,6 +41,17 @@ def make_node_package(root: Path, name: str, version: str) -> None:
     (package / "package.json").write_text(json.dumps({"name": name, "version": version}))
 
 
+@pytest.fixture(autouse=True)
+def isolated_user_env(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Never read or write the real user config/cache, and never reach the OpenAI API by accident."""
+    home = tmp_path_factory.mktemp("home")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(home / "config"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(home / "cache"))
+    for variable in ("OPENAI_API_KEY", "REGRESS_MODEL", "REGRESS_REASONING_EFFORT"):
+        monkeypatch.delenv(variable, raising=False)
+    return home
+
+
 @pytest.fixture
 def js_project(tmp_path: Path) -> Path:
     """A minimal fake JS project with the required packages 'installed'."""
