@@ -335,6 +335,12 @@ def eval_command(
         _render_eval(result)
     except RegressError as error:
         _fail(error)
+    except KeyboardInterrupt:
+        err_console.print(
+            "\n[yellow]Interrupted.[/] Results so far, including the interrupted module's prompts and "
+            "responses, are saved under examples/.regress/eval/."
+        )
+        raise typer.Exit(130) from None
 
 
 def _render_eval(result: EvalResult) -> None:

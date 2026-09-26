@@ -161,41 +161,59 @@ def evaluate_regress(
     options.generate = True
     result = EvalResult(created_at=datetime.now().astimezone(), mode="regress", model=llm.model, rounds=options.rounds)
     out_dir = _output_dir(examples_dir)
-    for suite in suites:
-        if on_module:
-            on_module(suite)
-        module = ModuleResult(module=suite.name)
-        result.modules.append(module)
-        with sandbox(examples_dir) as root:
-            project = load_project(root / suite.source, root / suite.test, runner)
-            store = RunStore(root)
-            try:
-                report = Pipeline(project, llm, options, reporter, store).run()
-            except RegressError as error:
-                module.error = str(error)
-                _keep_artifacts(store, out_dir / suite.name)
-                continue
-            run_dir = store.run_dirs()[-1]
-            module.run_id = report.id
-            wanted = [
-                ("Existing tests", report.stage("baseline")),
-                ("One-shot AI", report.stage("generated")),
-                ("Regress", report.kept),
-            ]
-            try:
-                for label, stage in wanted:
-                    content = None
-                    if stage is not None and stage.test_file_snapshot:
-                        content = (run_dir / stage.test_file_snapshot).read_text()
-                    outcome = hidden_bugs_caught(project, suite, label, content, run_dir / "hidden-bugs")
-                    outcome.score = 0.0 if content is None else stage.score if stage else None
-                    outcome.tests = stage.test_count if stage else 0
-                    module.stages.append(outcome)
-            except RegressError as error:
-                module.error = str(error)
-            _keep_artifacts(store, out_dir / suite.name)
-    _save(result, out_dir)
+    try:
+        for suite in suites:
+            if on_module:
+                on_module(suite)
+            _evaluate_module(examples_dir, suite, llm, options, reporter, runner, result, out_dir)
+    finally:
+        _save(result, out_dir)  # also when interrupted, so finished modules are not lost
     return result
+
+
+def _evaluate_module(
+    examples_dir: Path,
+    suite: BugSuite,
+    llm: LLM,
+    options: RunOptions,
+    reporter: Reporter,
+    runner: Runner,
+    result: EvalResult,
+    out_dir: Path,
+) -> None:
+    module = ModuleResult(module=suite.name)
+    result.modules.append(module)
+    with sandbox(examples_dir) as root:
+        project = load_project(root / suite.source, root / suite.test, runner)
+        store = RunStore(root)
+        try:
+            report = Pipeline(project, llm, options, reporter, store).run()
+        except RegressError as error:
+            module.error = str(error)
+            return
+        finally:
+            # Copy the run out of the throwaway sandbox even when it failed or was interrupted.
+            _keep_artifacts(store, out_dir / suite.name)
+
+        run_dir = store.run_dirs()[-1]
+        module.run_id = report.id
+        wanted = [
+            ("Existing tests", report.stage("baseline")),
+            ("One-shot AI", report.stage("generated")),
+            ("Regress", report.kept),
+        ]
+        try:
+            for label, stage in wanted:
+                content = None
+                if stage is not None and stage.test_file_snapshot:
+                    content = (run_dir / stage.test_file_snapshot).read_text()
+                outcome = hidden_bugs_caught(project, suite, label, content, run_dir / "hidden-bugs")
+                outcome.score = 0.0 if content is None else stage.score if stage else None
+                outcome.tests = stage.test_count if stage else 0
+                module.stages.append(outcome)
+        except RegressError as error:
+            module.error = str(error)
+        _keep_artifacts(store, out_dir / suite.name)
 
 
 def evaluate_oracles(
