@@ -94,10 +94,16 @@ class ConsoleReporter(Reporter):
         shown = problems if self.verbose else problems[:3]
         for problem in shown:
             first, *rest = problem.splitlines()
-            self.console.print(f"[dim]  · {escape(first)}[/]")
+            details = [line.strip() for line in rest if line.strip()]
             if self.verbose:
+                self.console.print(f"[dim]  · {escape(first)}[/]")
                 for line in rest:
                     self.console.print(f"[dim]    {escape(line)}[/]")
+            elif details:
+                # The first detail line is usually the assertion message: the part worth seeing.
+                self.console.print(f"[dim]  · {escape(first.rstrip(':'))}: {escape(details[0])}[/]")
+            else:
+                self.console.print(f"[dim]  · {escape(first)}[/]")
         if len(problems) > len(shown):
             self.console.print(f"[dim]  · ...and {len(problems) - len(shown)} more (use --verbose)[/]")
 

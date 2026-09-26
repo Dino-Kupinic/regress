@@ -1,7 +1,7 @@
 {
   "source": "src/backoff.ts",
   "test": "test/backoff.test.ts",
-  "oracle": "oracle/backoff.test.ts",
+  "oracle": "oracle/backoff.oracle.ts",
   "bugs": [
     {
       "id": "backoff-linear-growth",

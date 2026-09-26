@@ -8,6 +8,8 @@ from pydantic import BaseModel, Field, computed_field
 
 
 class TestStatus(StrEnum):
+    __test__ = False  # not a pytest test class
+
     PASSED = "passed"
     FAILED = "failed"
     SKIPPED = "skipped"
@@ -16,6 +18,8 @@ class TestStatus(StrEnum):
 
 
 class TestCase(BaseModel):
+    __test__ = False  # not a pytest test class
+
     full_name: str
     status: TestStatus
     failure_messages: list[str] = Field(default_factory=list)
@@ -23,6 +27,8 @@ class TestCase(BaseModel):
 
 class TestRunResult(BaseModel):
     """Outcome of running a single test file with Vitest."""
+
+    __test__ = False
 
     success: bool
     tests: list[TestCase] = Field(default_factory=list)

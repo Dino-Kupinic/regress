@@ -1,7 +1,7 @@
 {
   "source": "src/rate-limiter.ts",
   "test": "test/rate-limiter.test.ts",
-  "oracle": "oracle/rate-limiter.test.ts",
+  "oracle": "oracle/rate-limiter.oracle.ts",
   "bugs": [
     {
       "id": "bucket-uncapped-refill",

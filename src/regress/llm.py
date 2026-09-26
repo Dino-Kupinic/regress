@@ -12,6 +12,8 @@ from regress.errors import LLMError
 
 
 class TestFileProposal(BaseModel):
+    __test__ = False  # not a pytest test class
+
     summary: str = Field(description="One or two sentences on which behaviors the new tests pin down.")
     new_tests: list[str] = Field(description="Names of the tests you added.")
     equivalent_mutants: list[str] = Field(

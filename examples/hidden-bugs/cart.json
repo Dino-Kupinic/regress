@@ -1,7 +1,7 @@
 {
   "source": "src/cart.ts",
   "test": "test/cart.test.ts",
-  "oracle": "oracle/cart.test.ts",
+  "oracle": "oracle/cart.oracle.ts",
   "bugs": [
     {
       "id": "cart-quantity-overwrite",

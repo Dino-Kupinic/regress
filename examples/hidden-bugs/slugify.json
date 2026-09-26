@@ -1,7 +1,7 @@
 {
   "source": "src/slugify.ts",
   "test": "test/slugify.test.ts",
-  "oracle": "oracle/slugify.test.ts",
+  "oracle": "oracle/slugify.oracle.ts",
   "bugs": [
     {
       "id": "slug-keeps-diacritics",

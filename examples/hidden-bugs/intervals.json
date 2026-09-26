@@ -1,7 +1,7 @@
 {
   "source": "src/intervals.ts",
   "test": "test/intervals.test.ts",
-  "oracle": "oracle/intervals.test.ts",
+  "oracle": "oracle/intervals.oracle.ts",
   "bugs": [
     {
       "id": "intervals-shrink-container",

@@ -1,7 +1,7 @@
 {
   "source": "src/pagination.ts",
   "test": "test/pagination.test.ts",
-  "oracle": "oracle/pagination.test.ts",
+  "oracle": "oracle/pagination.oracle.ts",
   "bugs": [
     {
       "id": "pages-round-down",

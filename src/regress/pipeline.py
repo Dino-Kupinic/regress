@@ -79,9 +79,14 @@ class Pipeline:
         try:
             kept = self._run()
             self.report.status = "completed"
-        except (RegressError, KeyboardInterrupt) as error:
+        except BaseException as error:
             self.report.status = "failed"
-            self.report.error = str(error) or "Interrupted"
+            if isinstance(error, KeyboardInterrupt):
+                self.report.error = "Interrupted"
+            elif isinstance(error, RegressError):
+                self.report.error = str(error)
+            else:
+                self.report.error = f"Unexpected {type(error).__name__}: {error}"
             raise
         finally:
             self._finalize(kept)
@@ -99,8 +104,8 @@ class Pipeline:
             self.reporter.generated(baseline.stage, current.stage)
             self._mutate(current)
         else:
-            if baseline.content is None:
-                raise RegressError("--no-generate needs an existing test file to improve.")
+            if baseline.content is None or baseline.stage.test_count == 0:
+                raise RegressError("--no-generate needs an existing test file with at least one test to improve.")
             current = baseline
             if current.stage.mutation is None:
                 self._mutate(current)

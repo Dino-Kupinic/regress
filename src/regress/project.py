@@ -184,13 +184,22 @@ def find_test_file(root: Path, source: Path) -> Path | None:
             if (directory / name).is_file():
                 return directory / name
 
-    matches = sorted(path for path in walk_files(root) if path.name in names)
+    # Anywhere else, a same-named file only counts if it actually imports the module under test.
+    matches = sorted(path for path in walk_files(root) if path.name in names and _imports(path, source))
     if len(matches) == 1:
         return matches[0]
     if len(matches) > 1:
         listing = "\n".join(f"  {m.relative_to(root)}" for m in matches)
         raise ProjectError(f"Several candidate test files found; pick one with --test:\n{listing}")
     return None
+
+
+def _imports(test_file: Path, source: Path) -> bool:
+    try:
+        code = test_file.read_text()
+    except (OSError, UnicodeDecodeError):
+        return False
+    return any(refers_to(test_file, specifier, source) for specifier in import_specifiers(code))
 
 
 def default_test_path(root: Path, source: Path) -> Path:
