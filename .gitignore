@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.venv/
+dist/
+.pytest_cache/
+.ruff_cache/
+node_modules/
+.regress/
+.stryker-tmp/
+.env
+.DS_Store

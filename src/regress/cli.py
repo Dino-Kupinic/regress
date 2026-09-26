@@ -1,0 +1,275 @@
+from __future__ import annotations
+
+import os
+import shutil
+from pathlib import Path
+from typing import Annotated, Literal, NoReturn
+
+import typer
+from dotenv import find_dotenv, load_dotenv
+from rich.console import Console
+from rich.markup import escape
+from rich.table import Table
+
+from regress.config import CONFIG_FILE, CONFIG_TEMPLATE, load_settings
+from regress.errors import RegressError, ToolError
+from regress.evaluation import EvalResult, evaluate_oracles, evaluate_regress, load_suites, to_markdown
+from regress.llm import OpenAILLM
+from regress.pipeline import Pipeline, RunOptions
+from regress.process import run_command
+from regress.project import (
+    REQUIRED_PACKAGES,
+    VITEST_INSTALL_SPEC,
+    find_project_root,
+    install_specs,
+    load_project,
+    major,
+    missing_packages,
+    package_version,
+)
+from regress.store import RunStore, regress_dir
+from regress.ui import ConsoleReporter, format_score, render_report, render_run_list
+
+app = typer.Typer(
+    name="regress",
+    help="Improve AI-generated tests using mutation testing as an objective feedback loop.",
+    no_args_is_help=True,
+    add_completion=False,
+    pretty_exceptions_enable=False,
+)
+console = Console(highlight=False)
+err_console = Console(stderr=True, highlight=False)
+
+RunnerOption = Annotated[
+    Literal["auto", "bun", "npx"] | None,
+    typer.Option(help="How to run Vitest and Stryker. [default: auto, from regress.toml]"),
+]
+
+
+def main() -> None:
+    load_dotenv(find_dotenv(usecwd=True))
+    app()
+
+
+def _fail(error: RegressError) -> NoReturn:
+    err_console.print(f"[red bold]error:[/] {escape(str(error))}")
+    if isinstance(error, ToolError) and error.output:
+        err_console.print(f"[dim]{escape(error.output)}[/]")
+    raise typer.Exit(1)
+
+
+@app.command()
+def run(
+    source: Annotated[Path, typer.Argument(help="Source file to test, e.g. src/cart.ts.")],
+    test: Annotated[
+        Path | None, typer.Option("--test", "-t", help="Test file to extend. Auto-detected by default.")
+    ] = None,
+    rounds: Annotated[
+        int | None, typer.Option(min=0, max=5, help="Improvement rounds after the first mutation run. [default: 1]")
+    ] = None,
+    model: Annotated[
+        str | None, typer.Option("--model", "-m", help="OpenAI model. [default: gpt-5.5, or REGRESS_MODEL]")
+    ] = None,
+    baseline: Annotated[
+        bool, typer.Option("--baseline", help="Also mutation-test the existing tests before generating.")
+    ] = False,
+    generate: Annotated[
+        bool,
+        typer.Option(
+            "--generate/--no-generate",
+            help="Start with a one-shot generation round, or improve the existing tests directly.",
+        ),
+    ] = True,
+    runner: RunnerOption = None,
+    verbose: Annotated[
+        bool, typer.Option("--verbose", "-v", help="Show validation details and model summaries.")
+    ] = False,
+) -> None:
+    """Generate tests for SOURCE, then improve them from surviving mutants."""
+    try:
+        root = find_project_root(source.expanduser().resolve().parent)
+        settings = load_settings(root, rounds=rounds, model=model, runner=runner)
+        project = load_project(source, test, settings.runner)
+        llm = OpenAILLM(settings.model, settings.reasoning_effort)
+        options = RunOptions(
+            rounds=settings.rounds,
+            max_repairs=settings.max_repairs,
+            max_mutants=settings.max_mutants,
+            measure_baseline=baseline,
+            generate=generate,
+            vitest_timeout=settings.vitest_timeout,
+            stryker_timeout=settings.stryker_timeout,
+        )
+        Pipeline(project, llm, options, ConsoleReporter(console, verbose)).run()
+    except RegressError as error:
+        _fail(error)
+    except KeyboardInterrupt:
+        err_console.print("\n[yellow]Interrupted.[/] The test file was restored.")
+        raise typer.Exit(130) from None
+
+
+@app.command()
+def report(
+    run_id: Annotated[str | None, typer.Argument(help="Run ID (or part of it). Defaults to the latest run.")] = None,
+    list_runs: Annotated[bool, typer.Option("--list", "-l", help="List all runs.")] = False,
+    as_json: Annotated[bool, typer.Option("--json", help="Print the raw JSON report.")] = False,
+    mutants: Annotated[int, typer.Option(help="How many undetected mutants to show.")] = 10,
+    project: Annotated[Path, typer.Option("--project", "-p", help="Project directory.")] = Path("."),
+) -> None:
+    """Show the report of the latest (or a given) run."""
+    try:
+        store = RunStore(find_project_root(project.expanduser().resolve()))
+        if list_runs:
+            runs = [store.load(p.name) for p in store.run_dirs()]
+            if not runs:
+                raise RegressError("No runs yet. Start one with `regress run <file>`.")
+            render_run_list(runs, console)
+            return
+        loaded, run_dir = store.load(run_id)
+        if as_json:
+            typer.echo(loaded.model_dump_json(indent=2))
+            return
+        render_report(loaded, run_dir, console, show_mutants=mutants)
+    except RegressError as error:
+        _fail(error)
+
+
+@app.command()
+def init(
+    path: Annotated[Path, typer.Argument(help="Project directory (must contain package.json).")] = Path("."),
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Install missing dependencies without asking.")] = False,
+) -> None:
+    """Check a project and install what Regress needs (Vitest, StrykerJS)."""
+    try:
+        root = find_project_root(path.expanduser().resolve())
+        console.print(f"[bold]regress init[/] [dim]{escape(str(root))}[/]\n")
+        installs = install_specs(missing_packages(root))
+        for name in REQUIRED_PACKAGES:
+            version = package_version(root, name)
+            mark = "[green]✓[/]" if version else "[yellow]✗[/]"
+            console.print(f"  {mark} {name} [dim]{version or 'missing'}[/]")
+        vitest = package_version(root, "vitest")
+        if vitest and major(vitest) >= 5:
+            console.print(
+                f"[yellow]  vitest {vitest} breaks Stryker's Vitest runner; Regress needs {VITEST_INSTALL_SPEC}.[/]"
+            )
+            installs.append(VITEST_INSTALL_SPEC)
+        if installs:
+            command = _install_command(root, installs)
+            console.print(f"\nMissing: {' '.join(installs)}")
+            if not yes and not typer.confirm(f"Run `{' '.join(command)}`?", default=True):
+                raise RegressError("Dependencies not installed. Install them yourself, then run `regress init` again.")
+            with console.status("[dim]Installing...[/]"):
+                result = run_command(command, cwd=root, timeout=600)
+            if result.returncode != 0:
+                raise ToolError("Installing dependencies failed.", result.output[-3000:])
+            console.print("[green]✓[/] Installed")
+
+        regress_dir(root)
+        config = root / CONFIG_FILE
+        if not config.exists():
+            config.write_text(CONFIG_TEMPLATE)
+            console.print(f"[green]✓[/] Wrote {CONFIG_FILE}")
+        console.print("[green]✓[/] Created .regress/ for run artifacts (git-ignored)")
+        if not os.environ.get("OPENAI_API_KEY"):
+            console.print("[yellow]![/] OPENAI_API_KEY is not set. Export it or add it to a .env file.")
+        console.print("\nNext: [bold]regress run src/<file>.ts[/]")
+    except RegressError as error:
+        _fail(error)
+
+
+def _install_command(root: Path, packages: list[str]) -> list[str]:
+    lockfiles = {
+        "bun.lock": ["bun", "add", "-d"],
+        "bun.lockb": ["bun", "add", "-d"],
+        "pnpm-lock.yaml": ["pnpm", "add", "-D"],
+        "yarn.lock": ["yarn", "add", "-D"],
+        "package-lock.json": ["npm", "install", "-D"],
+    }
+    for lockfile, command in lockfiles.items():
+        if (root / lockfile).exists():
+            return [*command, *packages]
+    return ["bun", "add", "-d", *packages] if shutil.which("bun") else ["npm", "install", "-D", *packages]
+
+
+@app.command("eval")
+def eval_command(
+    examples: Annotated[Path, typer.Argument(help="Examples project with a hidden-bugs/ directory.")] = Path(
+        "examples"
+    ),
+    modules: Annotated[
+        list[str] | None, typer.Option("--module", "-m", help="Only evaluate these modules (repeatable).")
+    ] = None,
+    oracle: Annotated[
+        bool,
+        typer.Option("--oracle", help="Validate hidden bugs with the reference tests instead of running the model."),
+    ] = False,
+    rounds: Annotated[int | None, typer.Option(min=0, max=5, help="Improvement rounds per module.")] = None,
+    model: Annotated[str | None, typer.Option(help="OpenAI model.")] = None,
+    runner: RunnerOption = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Compare existing tests, one-shot AI tests, and Regress on example modules with hidden bugs."""
+    try:
+        examples = examples.expanduser().resolve()
+        settings = load_settings(examples, rounds=rounds, model=model, runner=runner)
+        suites = load_suites(examples, modules)
+
+        def announce(suite) -> None:
+            console.rule(f"[bold]{suite.name}[/]", align="left")
+
+        if oracle:
+            with console.status("[dim]Checking hidden bugs against the oracle tests...[/]"):
+                result = evaluate_oracles(examples, suites, settings.runner, on_module=None)
+        else:
+            options = RunOptions(
+                rounds=settings.rounds,
+                max_repairs=settings.max_repairs,
+                max_mutants=settings.max_mutants,
+                vitest_timeout=settings.vitest_timeout,
+                stryker_timeout=settings.stryker_timeout,
+            )
+            result = evaluate_regress(
+                examples,
+                suites,
+                lambda: OpenAILLM(settings.model, settings.reasoning_effort),
+                options,
+                ConsoleReporter(console, verbose),
+                settings.runner,
+                on_module=announce,
+            )
+        _render_eval(result)
+    except RegressError as error:
+        _fail(error)
+
+
+def _render_eval(result: EvalResult) -> None:
+    labels = result.stage_labels
+    table = Table(title=f"Regress evaluation ({result.mode})", header_style="dim", title_style="bold")
+    table.add_column("Module")
+    for label in labels:
+        table.add_column(f"{label}\nscore", justify="right")
+        table.add_column("bugs", justify="right")
+    for module in result.modules:
+        cells: list[str] = []
+        for label in labels:
+            stage = next((s for s in module.stages if s.label == label), None)
+            cells += (
+                ["—", "—"] if stage is None else [format_score(stage.score), f"{len(stage.caught)}/{stage.bugs_total}"]
+            )
+        name = module.module + (" [red](error)[/]" if module.error else "")
+        table.add_row(name, *cells)
+    totals: list[str] = []
+    for label in labels:
+        mean, caught, total = result.totals(label)
+        totals += [f"[bold]{format_score(mean)}[/]", f"[bold]{caught}/{total}[/]"]
+    table.add_row("[bold]All modules[/]", *totals, end_section=True)
+    console.print()
+    console.print(table)
+    for module in result.modules:
+        if module.error:
+            console.print(f"[red]{escape(module.module)}:[/] {escape(module.error)}")
+        for stage in module.stages:
+            if result.mode == "oracle" and stage.label == "Oracle" and stage.missed:
+                console.print(f"[yellow]{module.module}: oracle misses hidden bug(s) {', '.join(stage.missed)}[/]")
+    console.print(f"\n[dim]{escape(to_markdown(result).splitlines()[0][2:])} saved under .regress/eval/[/]")
