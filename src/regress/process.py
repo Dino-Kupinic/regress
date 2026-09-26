@@ -9,7 +9,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from regress.errors import ToolError
+from regress.errors import ToolTimeout
 
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 
@@ -51,16 +51,22 @@ def run_command(args: list[str], cwd: Path, timeout: float, log_path: Path | Non
     except subprocess.TimeoutExpired:
         _kill_group(proc)
         output, _ = proc.communicate()
-        raise ToolError(f"`{' '.join(args[:3])}` timed out after {timeout:.0f}s", strip_ansi(output or "")) from None
+        output = strip_ansi(output or "")
+        _write_log(log_path, args, cwd, f"{output}\n[stopped after {timeout:.0f}s]\n")
+        raise ToolTimeout(f"`{' '.join(args[:3])}` timed out after {timeout:.0f}s", output) from None
     except BaseException:
         _kill_group(proc)
         proc.wait()
         raise
     output = strip_ansi(output or "")
+    _write_log(log_path, args, cwd, output)
+    return CommandResult(args, proc.returncode, output, time.monotonic() - started)
+
+
+def _write_log(log_path: Path | None, args: list[str], cwd: Path, output: str) -> None:
     if log_path is not None:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_path.write_text(f"$ {' '.join(args)}\n(cwd: {cwd})\n\n{output}")
-    return CommandResult(args, proc.returncode, output, time.monotonic() - started)
 
 
 def _kill_group(proc: subprocess.Popen[str]) -> None:
