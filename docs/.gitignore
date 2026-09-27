@@ -4,3 +4,4 @@ node_modules/
 out/
 *.tsbuildinfo
 .env*
+next-env.d.ts
