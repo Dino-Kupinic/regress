@@ -1,10 +1,21 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CircleAlert } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { type MetaFunction, useLoaderData } from "react-router";
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
+import { toast } from "sonner";
 import { Page, PageHeader } from "~/components/page";
 import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "~/components/ui/alert-dialog";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import {
@@ -43,8 +54,8 @@ import {
   TableHeader,
   TableRow,
 } from "~/components/ui/table";
-import { api, type EvalResult } from "~/lib/api";
-import { dateTime, pageTitle, percent } from "~/lib/utils";
+import { api, type EvalJob, type EvalResult } from "~/lib/api";
+import { cn, dateTime, pageTitle, percent } from "~/lib/utils";
 
 export const meta: MetaFunction = () => [{ title: pageTitle("Evaluation") }];
 
@@ -71,6 +82,10 @@ const chartConfig = Object.fromEntries(
   ]),
 ) satisfies ChartConfig;
 
+/** Results have no ID; their output directory, else their time, tells them apart. */
+const evaluationKey = (result: EvalResult) =>
+  result.output_dir ?? result.created_at;
+
 const stageFor = (module: EvalResult["modules"][number], label: string) =>
   module.stages.find((entry) =>
     entry.label.toLowerCase().includes(label.toLowerCase()),
@@ -83,7 +98,11 @@ export default function Evaluation() {
     queryKey: ["evaluations"],
     queryFn: api.evaluations,
     initialData: initial.evaluations,
-    refetchInterval: 4_000,
+    // New results only appear while a job runs; also pick up CLI runs now and then.
+    refetchInterval: () =>
+      client.getQueryData<EvalJob>(["evaluation-job"])?.status === "running"
+        ? 4_000
+        : 30_000,
   }).data;
   const suites = useQuery({
     queryKey: ["evaluation-suites"],
@@ -94,10 +113,27 @@ export default function Evaluation() {
     queryKey: ["evaluation-job"],
     queryFn: api.evaluationJob,
     initialData: initial.job,
-    refetchInterval: 2_000,
+    refetchInterval: (query) =>
+      query.state.data?.status === "running" ? 2_000 : 15_000,
   }).data;
+  const activeRun = useQuery({ queryKey: ["project"], queryFn: api.project })
+    .data?.active_run;
   const [oracleOnly, setOracleOnly] = useState(true);
+  const [confirming, setConfirming] = useState(false);
   const [selected, setSelected] = useState(suites[0]?.name ?? "");
+  // Which result is on screen; null follows the newest one.
+  const [viewing, setViewing] = useState<string | null>(null);
+  const running = job.status === "running";
+  const wasRunning = useRef(running);
+  useEffect(() => {
+    if (wasRunning.current && !running) {
+      client.invalidateQueries({ queryKey: ["evaluations"] });
+      setViewing(null);
+      if (job.status === "completed") toast.success("Evaluation finished");
+      else if (job.status === "failed") toast.error("Evaluation failed");
+    }
+    wasRunning.current = running;
+  }, [running, job.status, client]);
   const run = useMutation({
     mutationFn: () => api.startEvaluation(oracleOnly ? "oracle" : "full"),
     onSuccess: () => {
@@ -105,7 +141,9 @@ export default function Evaluation() {
       client.invalidateQueries({ queryKey: ["evaluations"] });
     },
   });
-  const latest = evaluations[0];
+  const latest =
+    evaluations.find((item) => evaluationKey(item) === viewing) ??
+    evaluations[0];
   const suite = suites.find((item) => item.name === selected) ?? suites[0];
   const moduleResult = latest?.modules.find(
     (item) => item.module === suite?.name,
@@ -121,7 +159,6 @@ export default function Evaluation() {
   };
   const partial =
     latest && latest.counted_modules.length < latest.modules.length;
-  const running = job.status === "running";
   const chartData =
     latest?.modules.map((item) => ({
       module: item.module,
@@ -154,8 +191,11 @@ export default function Evaluation() {
               </FieldLabel>
             </Field>
             <Button
-              disabled={!suites.length || running || run.isPending}
-              onClick={() => run.mutate()}
+              disabled={
+                !suites.length || running || run.isPending || !!activeRun
+              }
+              title={activeRun ? "Wait for the run in progress" : undefined}
+              onClick={() => (oracleOnly ? run.mutate() : setConfirming(true))}
             >
               {(running || run.isPending) && (
                 <Spinner data-icon="inline-start" />
@@ -414,22 +454,39 @@ export default function Evaluation() {
                   </CardAction>
                 </CardHeader>
                 <ul className="max-h-72 divide-y overflow-y-auto scroll-fade">
-                  {evaluations.map((item, index) => (
-                    <li
-                      key={item.output_dir ?? index}
-                      className="grid grid-cols-[1fr_auto_auto] items-center gap-4 px-6 py-3 text-sm"
-                    >
-                      <span className="font-mono text-xs">
-                        {dateTime(item.created_at)}
-                      </span>
-                      <Badge variant={index === 0 ? "default" : "secondary"}>
-                        {item.mode}
-                      </Badge>
-                      <span className="text-caption text-muted-foreground tabular-nums">
-                        {item.modules.length} modules
-                      </span>
-                    </li>
-                  ))}
+                  {evaluations.map((item, index) => {
+                    const current = item === latest;
+                    return (
+                      <li key={evaluationKey(item)}>
+                        <button
+                          type="button"
+                          aria-current={current || undefined}
+                          onClick={() =>
+                            setViewing(index === 0 ? null : evaluationKey(item))
+                          }
+                          className={cn(
+                            "grid w-full grid-cols-[1fr_auto_auto] items-center gap-4 px-6 py-3 text-left text-sm transition-colors hover:bg-accent",
+                            current && "bg-accent",
+                          )}
+                        >
+                          <span className="font-mono text-xs">
+                            {dateTime(item.created_at)}
+                            {index === 0 && (
+                              <span className="ml-2 font-sans text-muted-foreground">
+                                latest
+                              </span>
+                            )}
+                          </span>
+                          <Badge variant={current ? "default" : "secondary"}>
+                            {item.mode}
+                          </Badge>
+                          <span className="text-caption text-muted-foreground tabular-nums">
+                            {item.modules.length} modules
+                          </span>
+                        </button>
+                      </li>
+                    );
+                  })}
                 </ul>
               </Card>
             </div>
@@ -490,6 +547,24 @@ export default function Evaluation() {
           </div>
         </>
       )}
+      <AlertDialog open={confirming} onOpenChange={setConfirming}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Run the full evaluation?</AlertDialogTitle>
+            <AlertDialogDescription>
+              The full evaluation runs Regress on all {suites.length} modules
+              with the configured model. It makes paid model calls and can take
+              a long time. The oracle check makes no model calls.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => run.mutate()}>
+              Run full evaluation
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Page>
   );
 }
