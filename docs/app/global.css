@@ -1,0 +1,15 @@
+@import 'tailwindcss';
+@import 'fumadocs-ui/css/neutral.css';
+@import 'fumadocs-ui/css/preset.css';
+@import '@fontsource-variable/inter';
+@import '@fontsource/ibm-plex-mono/latin-400.css';
+@import '@fontsource/bayon/latin-400.css';
+
+@theme {
+  --font-sans: 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+  --font-brand: 'Bayon', ui-sans-serif, system-ui, sans-serif;
+}
+
+body { font-synthesis: none; }
+::selection { background: var(--color-fd-accent); }

@@ -1,0 +1,78 @@
+---
+title: Using the web app
+description: Set up a project, start runs, inspect results, and manage personal defaults in the browser.
+---
+
+The web app connects to the project selected by `regress serve`. It provides a dashboard, run history, detailed reports, evaluations, settings, and setup. It does not upload or switch repositories; change the API's project directory to work on a different project.
+
+Follow [Your first run](/docs/using) to start the local API and frontend.
+
+## Check project setup
+
+Open **Project setup** at `/setup`. The page shows the served project directory, installed Vitest and Stryker versions, whether `regress.toml` exists, and whether the server has an OpenAI API key.
+
+Use **Install … packages** when dependencies are missing, or **Check and write config** when they are already installed. This action runs the same setup work as `regress init --yes`: it can change development dependencies and the package lockfile, and writes `regress.toml` only when the file is absent. Installation can take several minutes.
+
+If the API key is missing, set `OPENAI_API_KEY` in the Python server's environment or its working directory's `.env`, then restart `regress serve`. There is no API-key input in the browser.
+
+The **Readiness** panel explains what prevents a run from starting. A missing project config is not itself an error; built-in and personal defaults can be used.
+
+## Start a run
+
+Choose **New run** from the application or select a file on the dashboard.
+
+1. Search for and select a source file. Regress displays the test file it will extend or create.
+2. Choose a model or keep the configured default.
+3. Set **Rounds** to 0–5. This counts improvement rounds after the initial mutation run. The drawer starts at 1 each time it opens.
+4. Enable **Measure baseline** to mutation-test the existing tests before generation.
+5. Enable **Skip generation** to improve an existing test file directly.
+6. Check **Pre-flight**, then choose **Start run**.
+
+Baseline measurement and skipping generation are disabled when no test file exists. Skipping generation also requires at least one passing existing test; the engine checks this when the run starts.
+
+The drawer uses automatic test-file discovery. To specify a different test path, use [the CLI](/docs/using/cli) or [HTTP API](/docs/reference/http-api). If you copy the drawer's CLI command after selecting a particular model, add `--model MODEL_ID` yourself: the displayed command does not include that selection.
+
+Only one project operation can run at a time. Runs, dependency installs, and evaluations share the API's reservation. A conflicting request returns an error until the current operation finishes.
+
+## Follow a running job
+
+Starting a run opens its detail page at `/runs/:id`. The activity view shows the current phase, elapsed time, model activity, validation retries, and mutation progress. The page polls the API, so navigating away does not cancel the work.
+
+Choose **Cancel run** to request cancellation. Wait until the status becomes **Cancelled** or another terminal status before starting more work. Stopping the API also stops its active work.
+
+## Inspect a completed run
+
+The detail page provides these tabs:
+
+| Tab | What to inspect |
+| --- | --- |
+| **Overview** | Mutation scores, stage history, outcome counts, and saved artifacts. |
+| **Mutants** | Mutant status, location, operator, original and mutated code, and covering tests where recorded. |
+| **Tests** | Added test names and stage diffs in unified or split view. **Copy file** copies the selected stage's test file. |
+| **Model log** | Each model call's token usage, prompt, summary, returned file, and reported equivalent mutants. |
+
+In **Tests**, choose the stage to inspect. Its diff compares that stage with the version it started from; a previous stage that lowered the score may have been skipped. The retained version is identified by the report's kept stage.
+
+Use **Artifacts** to jump to downloadable run files. Use **Run again** to open a new run for the same source file; it resets the drawer options instead of copying every previous option.
+
+See [Reports and mutation scores](/docs/reference/reports) to interpret scores, rejected stages, and token counts.
+
+## Read the dashboard and history
+
+The dashboard lists eligible source files and their latest results, provides a file picker for starting work, and charts measured scores. Files without a completed measurement have no measured score; the dashboard is not a project-wide coverage report.
+
+Open **Runs** at `/runs` to browse saved runs, filter by source file and status, and open individual results. History comes from the served project's `.regress/runs/` directory. CLI runs saved there can also appear, although they do not have the API event log.
+
+## Change settings
+
+Open **Settings** at `/settings`. You can refresh the model list, choose a personal default, toggle the CLI model question, select a reasoning effort, and edit run defaults, timeouts, or runner preference. Choose **Save changes** to persist edits or **Discard** to restore the loaded values.
+
+Settings are saved to the server user's personal Regress configuration. A project's `regress.toml` or environment variables can still override them. The page shows the model's source and the order of configuration layers. In a hosted deployment these are shared server settings, not per-browser preferences.
+
+The UI exposes a subset of the full settings. For example, `llm_max_duration` and `llm_max_output_tokens` are configured in TOML or through the API. See [Configuration](/docs/reference/configuration) for all supported keys.
+
+## Run an evaluation
+
+The **Evaluation** page at `/evaluation` is for projects with a `hidden-bugs/` suite directory, such as the bundled examples. **Oracle only** is enabled initially and uses hand-written reference tests without model requests. Turn it off for a full model-backed benchmark, then choose **Run evaluation**.
+
+The page shows background output, comparison totals, per-module results, hidden bug definitions, and past evaluations. Full evaluation uses the server's effective model and round defaults. See [Evaluations](/docs/using/evaluations) for how results are counted.

@@ -1,0 +1,133 @@
+---
+title: HTTP API
+description: The JSON API behind the web app, for scripts and your own tools.
+---
+
+`regress serve` runs a FastAPI server for one project. The web app uses only this API, so anything you can do in the browser you can also do with `curl` or a script.
+
+```bash
+regress serve /path/to/project        # http://127.0.0.1:8765/api
+```
+
+- Interactive documentation: `/api/docs`.
+- OpenAPI schema: `/api/openapi.json`. Operation IDs are the route function names, such as `start_run`, so generated clients read well.
+- All paths below are relative to `/api`. File paths in requests and responses are relative to the project root, for example `src/cart.ts`.
+
+## Access and safety
+
+The server binds to `127.0.0.1` by default and has no authentication of its own. A non-loopback `--host` requires `--allow-remote`. To host it, use the [Docker deployment](/docs/deployment/application), which puts it behind Nginx with Basic Authentication.
+
+- **Allowed origins.** Browsers may call the API only from `http://localhost:5173` and `http://127.0.0.1:5173` unless you pass `--origin URL` (repeatable). Requests that change something from any other origin are refused with `403`. Clients without an `Origin` header, such as `curl`, are allowed.
+- **Host check.** The `Host` header must match the server, which blocks DNS-rebinding attacks.
+- **Body limit.** Request bodies over 1 MiB are refused with `413`.
+- **Request IDs.** Every response carries an `X-Request-ID` header. Unexpected server errors return a generic message; find the details in the server log by that ID.
+
+## Endpoints
+
+### Health and project
+
+| Method | Path | Returns |
+| --- | --- | --- |
+| `GET` | `/health` | Liveness and the API version. |
+| `GET` | `/ready` | `200` when the project, installed tools, API key presence, and artifact storage are ready; `503` with the failing checks otherwise. |
+| `GET` | `/project` | Project root and name, config file, installed package versions, toolchain, problems preventing a run, whether the API key is set, and the active run. |
+| `POST` | `/project/init` | Installs missing dependencies and writes `regress.toml`, like `regress init --yes`. Can take minutes. |
+| `GET` | `/project/sources` | Source files that can be tested. |
+| `GET` | `/project/sources/{path}` | The test file a source maps to, whether it exists, and its line count. |
+| `GET` | `/project/files/{path}` | Contents of a project file. |
+
+### Settings and models
+
+| Method | Path | Returns |
+| --- | --- | --- |
+| `GET` | `/settings` | Effective settings, where the model comes from, the personal config and its path, and the project config path. |
+| `PATCH` | `/settings` | Saves keys to the personal config. Send only the keys to change; `null` removes a key. |
+| `GET` | `/models?refresh=false&all=false` | Models your key can use, the default, and where the list came from. `refresh=true` skips the day-long cache; `all=true` includes older models and snapshots. |
+
+### Runs
+
+| Method | Path | Returns |
+| --- | --- | --- |
+| `GET` | `/runs?source=&limit=` | Run summaries, newest first, including the run in progress. |
+| `POST` | `/runs` | Starts a run in the background. Returns `202`, the run detail, and a `Location` header. |
+| `GET` | `/runs/{id}` | The report, plus `live` state while it runs. |
+| `POST` | `/runs/{id}/cancel` | Requests cancellation, like Ctrl-C in the CLI. Returns `202`; the run ends as `cancelled`. |
+| `DELETE` | `/runs/{id}` | Deletes a finished run's artifacts. Returns `204`. The test file is not touched. |
+| `GET` | `/runs/{id}/events?after=0` | The run's log entries after a sequence number. |
+| `GET` | `/runs/{id}/events/stream` | The same log as server-sent events. |
+| `GET` | `/runs/{id}/diff` | Original test file against the kept tests. |
+| `GET` | `/runs/{id}/stages/{index}/tests` | The test file saved for a stage. |
+| `GET` | `/runs/{id}/stages/{index}/diff` | A stage's test file against the version it started from, with added test names. |
+| `GET` | `/runs/{id}/stages/{index}/mutants?status=undetected` | A stage's mutants. `status` is `undetected`, `detected`, or `all`. |
+| `GET` | `/runs/{id}/llm` | Model calls with token counts and summaries. |
+| `GET` | `/runs/{id}/llm/{name}` | One call's prompt and returned test file. |
+| `GET` | `/runs/{id}/artifacts` | Files in the run directory. |
+| `GET` | `/runs/{id}/artifacts/{path}` | Downloads one artifact. |
+
+### Evaluations
+
+| Method | Path | Returns |
+| --- | --- | --- |
+| `GET` | `/evaluations` | Saved evaluation results, newest first. |
+| `GET` | `/evaluations/suites` | Hidden-bug suites in the project's `hidden-bugs/` directory. |
+| `GET` | `/evaluations/job` | The background evaluation: `idle`, `running`, `completed`, or `failed`, with its output. |
+| `POST` | `/evaluations` | Starts an evaluation. Body: `{"mode": "oracle"}` or `{"mode": "full"}`. Returns `202`. |
+
+## Start a run
+
+```bash
+curl --request POST http://127.0.0.1:8765/api/runs \
+  --header 'content-type: application/json' \
+  --data '{"source": "src/cart.ts", "baseline": true, "rounds": 1}'
+```
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `source` | required | Source file, relative to the project root. |
+| `test` | discovered | Test file to extend or create. |
+| `model` | configured | Model for this run. |
+| `rounds` | configured | Improvement rounds, 0–5. |
+| `baseline` | `false` | Mutation-test the existing tests first. |
+| `generate` | `true` | `false` improves the existing tests directly, like `--no-generate`. |
+| `runner` | configured | `auto`, `bun`, or `npx`. |
+
+Unknown fields and values of the wrong type are rejected with `422`. The response is the new run's detail; its `summary.id` is the run ID.
+
+## Follow a run
+
+Poll `GET /runs/{id}` and `GET /runs/{id}/events?after=N`, passing the last `seq` you received, until `summary.active` is false. Or stream:
+
+```bash
+curl --no-buffer http://127.0.0.1:8765/api/runs/RUN_ID/events/stream
+```
+
+The stream sends three event types:
+
+- `run-event`: a new log entry. Its SSE `id` is the sequence number, so an `EventSource` that reconnects resumes where it stopped.
+- `live`: what the run is doing now, whenever that changes.
+- `end`: the run's summary. The stream then closes; close your `EventSource` on `end`, or it reconnects.
+
+A finished run replays its log and ends straight away.
+
+## One job at a time
+
+The server runs one project operation at a time: a run, an evaluation, or a dependency install. Starting another while one is active returns `409` with a message that names what is running. A second API server for the same project fails at startup, because the first holds an exclusive lock on the project.
+
+## Errors
+
+Errors have a JSON body with `detail` and, for tool failures, `output`:
+
+```json
+{ "detail": "Stryker failed (exit code 1).", "output": "…last lines of the Stryker log…" }
+```
+
+| Status | Meaning |
+| --- | --- |
+| `400` | The project or request is invalid, for example a missing source file or bad configuration. |
+| `403` | A browser request from an origin that is not allowed. |
+| `404` | No such run, stage, or file. |
+| `409` | Another operation is in progress, or the run is not in the state the request needs. |
+| `413` | The request body is larger than 1 MiB. |
+| `422` | The request body does not match the schema. |
+| `500` | Vitest, Stryker, or the package manager failed (`output` has its log), or an unexpected error occurred (check the log for the `X-Request-ID`). |
+| `503` | The model request failed, or `/ready` reports the project is not ready. |

@@ -1,0 +1,92 @@
+---
+title: Configuration
+description: Every setting Regress reads, where it comes from, and which layer wins.
+---
+
+Regress merges settings from several layers. A later layer overrides an earlier one, key by key:
+
+1. **Built-in defaults** shipped with Regress.
+2. **Personal config** at `~/.config/regress/config.toml`, or `$XDG_CONFIG_HOME/regress/config.toml` when that variable is set.
+3. **Project config** in `regress.toml` at the project root.
+4. **Environment variables** `REGRESS_MODEL` and `REGRESS_REASONING_EFFORT`.
+5. **Options on a run**, such as `--model` and `--rounds` on the CLI, or the fields of a run request in the web app and API.
+
+The web app's **Settings** page and `regress models --set` write the personal config. They cannot override a key that `regress.toml` or the environment sets; the page shows where the effective model comes from.
+
+## Settings
+
+| Key | Default | Allowed | Meaning |
+| --- | --- | --- | --- |
+| `model` | `gpt-6-luna` | A model ID | OpenAI model that writes and improves tests. |
+| `ask_model` | `true` | `true`, `false` | Ask which model to use before a CLI run in an interactive terminal. |
+| `reasoning_effort` | unset | `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` | Reasoning effort for reasoning models. Unset uses the model's default. |
+| `rounds` | `1` | 0–5 | Improvement rounds after the first mutation run. |
+| `max_repairs` | `2` | 0–5 | Retries when a proposed test file fails validation. |
+| `max_mutants` | `40` | 1–200 | Undetected mutants sent to the model per improvement round. |
+| `runner` | `auto` | `auto`, `bun`, `npx` | How to run Vitest and Stryker. `auto` prefers Bun and falls back to npx. |
+| `llm_timeout` | `120` | 30–3600 s | Silence from the model before Regress retries, up to three attempts. |
+| `llm_max_duration` | `1800` | 30–14400 s | Total time allowed for one proposal, including retries. |
+| `llm_max_output_tokens` | `32768` | 1024–131072 | Output budget for one model response, including reasoning. |
+| `vitest_timeout` | `300` | 10–14400 s | Time limit for one Vitest validation run. |
+| `stryker_timeout` | `1800` | 30–86400 s | Time limit for one Stryker mutation run. |
+
+Unknown keys, values outside these ranges, and values of the wrong type are rejected with the file that contains them. Strings are not converted: write `rounds = 2`, not `rounds = "2"`.
+
+The web app's Settings page edits the most common keys. Set `llm_max_duration`, `llm_max_output_tokens`, and the reasoning efforts not offered there in TOML, or through `PATCH /api/settings`.
+
+## Project config
+
+`regress init` writes this `regress.toml` when the project has none:
+
+```toml title="regress.toml"
+# Regress configuration for this project. Command-line flags override these values.
+
+# model = "gpt-6-luna"   # pin a model for everyone on this project (overrides your personal default)
+# reasoning_effort = "medium"  # for reasoning models (env: REGRESS_REASONING_EFFORT)
+rounds = 1            # improvement rounds driven by surviving mutants
+max_repairs = 2       # retries when a generated test file fails validation
+max_mutants = 40      # undetected mutants sent to the model per round
+runner = "auto"       # how to run Vitest and Stryker: "bun", "npx", or "auto"
+# llm_timeout = 120   # seconds without any data from the model before Regress retries (up to 3 attempts)
+# llm_max_duration = 1800  # total seconds allowed for one proposal, including retries
+# llm_max_output_tokens = 32768  # output budget, including model reasoning
+```
+
+Commit `regress.toml` to share defaults with your team. Pin `model` here only when everyone should use the same model; it overrides each person's personal default.
+
+## Personal config
+
+The personal file holds only the keys you set. `regress models` manages the model keys:
+
+```bash
+regress models --set gpt-6-luna --no-ask
+```
+
+```toml title="~/.config/regress/config.toml"
+# Your personal Regress defaults. Manage them with `regress models`.
+model = "gpt-6-luna"
+ask_model = false
+```
+
+Regress replaces the file atomically when it saves. In the [Docker deployment](/docs/deployment/application) the personal config lives on the volume at `/data/config/regress/config.toml`, so it is shared by everyone who uses that instance.
+
+## Environment variables
+
+| Variable | Used by | Purpose |
+| --- | --- | --- |
+| `OPENAI_API_KEY` | Engine, API | Required for generation, improvement, and full evaluations. Read from the environment or a `.env` file found from the working directory upward. |
+| `OPENAI_BASE_URL`, `OPENAI_ORG_ID`, `OPENAI_PROJECT_ID` | Engine | Standard OpenAI SDK settings, also used to key the model-list cache. |
+| `REGRESS_MODEL` | Engine | Overrides the configured model and skips the CLI model question. |
+| `REGRESS_REASONING_EFFORT` | Engine | Overrides the configured reasoning effort. |
+| `XDG_CONFIG_HOME` | Engine | Moves the personal config directory. |
+| `XDG_CACHE_HOME` | Engine | Moves the model-list cache, normally `~/.cache/regress`. |
+| `REGRESS_PUBLIC_ORIGIN` | Container | HTTPS origin of a deployment, for example `https://regress.example.com`. |
+| `REGRESS_BASIC_AUTH_USER`, `REGRESS_BASIC_AUTH_PASSWORD` | Container | Login for the Nginx proxy in front of the deployment. |
+
+The container variables are described in [Deploy the application](/docs/deployment/application).
+
+## Choosing the model
+
+The model list comes from the OpenAI API and is cached for a day. When the list cannot be fetched, Regress falls back to the models known to the installed SDK; that list does not prove your key can use them.
+
+The effective model for a run is chosen in this order: `--model` (or the model chosen in the web app's New run panel), `REGRESS_MODEL`, `regress.toml`, the personal config, then the built-in default. A CLI run asks which model to use only when none of the first two is set, `ask_model` is true, and the terminal is interactive. `--yes` also skips the question.

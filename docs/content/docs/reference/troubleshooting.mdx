@@ -1,0 +1,135 @@
+---
+title: Troubleshooting
+description: Fixes for the problems you are most likely to meet with the toolchain, runs, the web app, and deployments.
+---
+
+Start with the message Regress prints. For a failed run, the report and artifacts usually say exactly what happened:
+
+```bash
+regress report --list
+regress report RUN_ID --json
+```
+
+Tool logs are in the run's `vitest/` and `stryker/` directories, and every model prompt and response is in `llm/`. See [Reports and mutation scores](/docs/reference/reports) for the layout.
+
+## Project and toolchain
+
+### Missing dev dependencies
+
+```text
+Missing dev dependencies: vitest, @stryker-mutator/core.
+```
+
+Regress reads installed versions from `node_modules`, so the packages must be installed, not only listed in `package.json`. Run `regress init`, or install them yourself:
+
+```bash
+bun add -d vitest@^4 @stryker-mutator/core @stryker-mutator/vitest-runner
+```
+
+### Vitest 5 is not supported
+
+```text
+vitest 5.x is not supported by @stryker-mutator/vitest-runner 10.x: mutants are never activated …
+```
+
+With this combination Stryker never activates mutants, so every mutant would falsely survive. Install Vitest 4. `regress init` offers to do it. Vitest older than 2 is rejected for the same reason.
+
+### Bun is not installed
+
+```text
+Bun is not installed. Install it from https://bun.sh or use --runner npx.
+```
+
+You set `runner = "bun"`, or passed `--runner bun`, on a machine without Bun. Install Bun, or use `auto`, which falls back to npx.
+
+### No package.json found
+
+Regress uses the nearest directory above the source file that contains a `package.json`. Run the command inside your project, or pass a path inside it. In a monorepo, each package with its own `package.json` is a separate project.
+
+### It looks like a test file
+
+Pass the implementation file, such as `src/cart.ts`, not `test/cart.test.ts`. Choose the test file with `--test` if discovery picks the wrong one.
+
+## Runs
+
+### Existing tests fail
+
+Regress needs the current tests to pass against the current implementation before it starts, because it treats the implementation as the source of truth. Fix the failing tests in your project first, then run again.
+
+### `--no-generate` needs an existing test file
+
+Improving tests directly needs a test file with at least one passing test. Drop `--no-generate` to generate tests first.
+
+### Every proposal is rejected
+
+After `max_repairs` retries a proposal is recorded as a rejected stage. Its `problems` list the reasons, such as a failing test, a removed existing test, a mocked target module, a skipped or focused test, or an edited source file. Check the prompts and responses in `llm/`. Try a stronger model, a higher `reasoning_effort`, or raise `max_repairs`.
+
+### The model times out or stops
+
+- `llm_timeout` is how long the model may be silent before Regress retries, up to three attempts.
+- `llm_max_duration` caps the total time for one proposal.
+- `The model did not finish` with a length reason means the output budget ran out; raise `llm_max_output_tokens`.
+
+See [Configuration](/docs/reference/configuration) for the limits.
+
+### OpenAI errors
+
+| Message | Fix |
+| --- | --- |
+| `OPENAI_API_KEY is not set` | Export the key, or add it to a `.env` file in the directory you run Regress from. Restart `regress serve` after changing it. |
+| `OpenAI rejected the API key` | The key is wrong or revoked. |
+| `OpenAI quota exhausted` | Add billing credit or raise the limit for the key's project. |
+| `… is not available to your API key` | Choose another model with `regress models`. |
+
+### Mutation testing is slow or times out
+
+Stryker runs the selected tests once per mutant. Large files produce many mutants. Raise `stryker_timeout`, test a smaller module, or give the machine more CPU. A single mutant that times out counts as detected, but a Stryker run that exceeds `stryker_timeout` fails the run.
+
+### The source file changed
+
+Regress stops if the source file changes during a run, because the tests would no longer match what was measured. The original files are restored. Don't edit the file, or let a formatter or watcher rewrite it, while a run is in progress.
+
+## Web app and API
+
+### Could not connect to the Regress API
+
+The web app shows this banner when `/api` does not answer. Start the API with `uv run regress serve examples`, or your project path, on port 8765, and keep it running next to `bun run dev`.
+
+### Another Regress API server already owns the project
+
+Only one API server may serve a project. Stop the other server; a crashed server releases its lock when its process exits.
+
+### Requests from an origin are not allowed
+
+The API only accepts changes from the web app's own origin. When you serve the frontend on another address, start the API with `--origin http://your-address:port`.
+
+### A run or evaluation cannot start (409)
+
+A run, evaluation, or dependency install is already in progress. Wait for it to finish or cancel the run. The message names what is running.
+
+### A CLI job and the API disagree
+
+Don't run `regress run` or `regress eval` against a project that `regress serve` is serving. Stop the server first.
+
+## Deployment
+
+### The container exits at startup
+
+The entrypoint requires `REGRESS_PUBLIC_ORIGIN`, `REGRESS_BASIC_AUTH_USER`, and `REGRESS_BASIC_AUTH_PASSWORD`. The origin must be `https://` with no path or trailing slash, and the user name must not contain colons. The log names the missing or invalid variable.
+
+### `/healthz` returns 503
+
+The response lists which check failed:
+
+- `project: false`: sign in and open `/api/project` or the Project setup page for the missing package, invalid setting, or missing key.
+- `storage: false`: the volume at `/data` is not writable, or it is full.
+
+Readiness does not call OpenAI. A ready instance can still fail runs because of the key, quota, model access, or the network.
+
+### Files are restored after a crash
+
+When a container is killed during a run, the next start restores the source and test file from the run's recovery record and marks the run failed. This is expected. Keep the run directory intact until the server has started.
+
+### Correlating an error
+
+Every API response has an `X-Request-ID` header. Search the container log for that ID to find the full error. For run failures, read `/data/project/.regress/runs/RUN_ID/report.json` and `events.jsonl`.

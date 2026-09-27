@@ -1,0 +1,109 @@
+---
+title: Command-line guide
+description: Initialize projects, run the test-improvement loop, choose models, and inspect saved results.
+---
+
+Use `regress` after `uv tool install .`, or prefix commands with `uv run` when working from the Regress checkout. Run `regress --help` or `regress COMMAND --help` for command-specific help.
+
+## Initialize a project
+
+```bash
+regress init
+regress init /path/to/project --yes
+```
+
+The path defaults to the current directory. Regress finds the nearest containing `package.json`, checks installed dependencies, installs missing Vitest/Stryker packages with confirmation, writes an absent `regress.toml`, and creates the ignored `.regress/` directory. `--yes` skips the installation confirmation.
+
+The installer follows the project's Bun, pnpm, Yarn, or npm lockfile. Without a recognized lockfile, it prefers Bun when installed, otherwise npm. With the bundled Stryker Vitest runner, use Vitest 2–4; initialization installs `vitest@^4` when Vitest is missing or version 5+ is detected.
+
+## Generate and improve tests
+
+```bash
+regress run src/cart.ts
+regress run src/cart.ts --baseline --rounds 2
+regress run src/cart.ts --test tests/cart.spec.ts --no-generate
+regress run src/cart.ts --rounds 0 --yes
+```
+
+| Option | Behavior |
+| --- | --- |
+| `--test`, `-t PATH` | Explicit test file to extend or create. Defaults to automatic discovery. |
+| `--rounds INTEGER` | Improvement rounds after the first mutation run; 0–5, default 1 unless configured. |
+| `--model`, `-m MODEL` | Model for this invocation; skips the interactive model question. |
+| `--baseline` | Also mutation-test passing existing tests before generation. Default off. |
+| `--generate` / `--no-generate` | Enable the initial generation step, or improve existing tests directly. Generation is on by default. |
+| `--runner auto\|bun\|npx` | Runner override. Auto prefers Bun and falls back to npx. |
+| `--verbose`, `-v` | Show validation details and model summaries. |
+| `--yes`, `-y` | Skip the model question and use the effective default. |
+
+`--rounds 0` still generates, validates, and mutation-tests a candidate. `--no-generate` requires an existing passing test file with at least one test; it first measures that file and then improves from its undetected mutants.
+
+Source and explicit test paths are resolved relative to your shell's working directory. The test must be in the source's project and must differ from the source. Supported extensions are `.ts`, `.tsx`, `.mts`, `.cts`, `.js`, `.jsx`, `.mjs`, and `.cjs`.
+
+Existing tests must pass before Regress proceeds. Regress preserves their full test names in accepted candidates, but it may rewrite the test file. Inspect the final diff before committing.
+
+### Progress and cancellation
+
+The terminal displays the active phase and elapsed time. Model activity can include reasoning or approximate writing progress. Non-interactive output prints periodic progress lines. A quiet model connection is retried according to the [model timeouts](/docs/reference/configuration).
+
+Press Ctrl-C to interrupt. The CLI exits with code 130 and restores the original test file. Normal command errors exit with code 1. Reports and intermediate artifacts help diagnose failures.
+
+## Inspect reports
+
+```bash
+regress report
+regress report --list
+regress report 20260927-120000-cart
+regress report cart --json
+regress report --project /path/to/project --mutants 25
+```
+
+Without an ID, `report` opens the latest saved run. An exact ID takes precedence; a partial ID matches the latest matching directory. Use the full ID when you need a specific result.
+
+| Option | Behavior |
+| --- | --- |
+| `--list`, `-l` | List saved runs. |
+| `--json` | Print the raw report JSON. |
+| `--mutants INTEGER` | Number of undetected mutants to show; default 10. |
+| `--project`, `-p PATH` | Project to inspect; defaults to the current directory. |
+
+Read [Reports and mutation scores](/docs/reference/reports) for artifact layout and interpretation.
+
+## Choose a model
+
+```bash
+regress models
+regress models --all --refresh
+regress models --set MODEL_ID --no-ask
+regress models --ask
+```
+
+Replace `MODEL_ID` with an ID available to your API key. The model catalog is fetched from OpenAI, cached for a day, and falls back to the installed SDK's catalog when unavailable. An offline fallback is not confirmation that your key can access a model.
+
+`--set` saves the personal default; `--ask` and `--no-ask` control the CLI prompt. The built-in default in this version is `gpt-6-luna`. A project setting or `REGRESS_MODEL` can override the personal default.
+
+The run command does not prompt when given `--model`, `--yes`, or `REGRESS_MODEL`, when `ask_model` is false, or when standard input/output is not an interactive terminal.
+
+## Serve the web API
+
+```bash
+regress serve /path/to/project
+regress serve /path/to/project --port 8765
+```
+
+The path defaults to `.`. The server listens at `127.0.0.1:8765` by default; interactive API documentation is at `/api/docs`.
+
+`--host` changes the bind address. A non-loopback address requires `--allow-remote`; use the authenticated deployment proxy when hosting the application. `--origin URL` is repeatable and replaces the default allowed browser origins (`http://localhost:5173` and `http://127.0.0.1:5173`).
+
+The API serves one project and reserves it exclusively. Do not run a CLI mutation job or evaluation against that project while the API is serving it. Backend process supervision and project locking require Linux or macOS.
+
+## Evaluate test quality
+
+```bash
+regress eval examples --oracle
+regress eval examples --module cart --module slugify --rounds 1 --yes
+```
+
+`eval` accepts `--oracle`, repeatable `--module`/`-m`, `--model`, `--rounds`, `--runner`, `--verbose`/`-v`, and `--yes`/`-y`. Here `-m` means module; use the full `--model` flag for a model choice.
+
+See [Evaluations](/docs/using/evaluations) for benchmark setup, outputs, and interpretation.

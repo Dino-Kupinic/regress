@@ -1,0 +1,100 @@
+---
+title: Installation
+description: Install Regress from source and run the CLI, Python API, and web application locally.
+---
+
+Regress has a Python CLI and API, a React web application, and a JavaScript toolchain that runs in the project you want to test. Start with the bundled example project to verify the complete setup.
+
+## Requirements
+
+| Tool | Requirement |
+| --- | --- |
+| Operating system | Linux or macOS for backend process supervision and project locking. |
+| Python | 3.13 or later. |
+| uv | Installs and runs the Python package. |
+| Node.js | Use Node.js 22, matching the repository's CI and production image. |
+| Bun | Recommended for the examples, frontend, Vitest, and Stryker. CI and the production image use Bun 1.3.13. |
+| OpenAI API key | Required for model generation and improvement; backend tests and oracle evaluation do not call a model. |
+
+The target project needs installed `vitest`, `@stryker-mutator/core`, and `@stryker-mutator/vitest-runner` development dependencies. Use Vitest 2–4; the bundled examples use Vitest 4 and Stryker 10. Regress rejects the unsupported Vitest 5/Stryker runner 10 combination because mutants would not activate. [Project setup](/docs/getting-started/project-setup) explains installation for your own repository.
+
+Regress can run project tools through `npx` when Bun is unavailable. The repository's integration tests require Bun.
+
+## Get the repository
+
+```bash
+git clone https://github.com/Dino-Kupinic/regress.git
+cd regress
+uv sync --frozen --python 3.13
+```
+
+Install the example project's dependencies:
+
+```bash
+cd examples
+bun install --frozen-lockfile
+cd ..
+```
+
+Run the CLI from the repository root with `uv run regress`. To make `regress` available outside this checkout, install it as a tool:
+
+```bash
+uv tool install .
+regress --help
+```
+
+If `regress` is not on your shell's `PATH` after installation, run `uv tool update-shell` and open a new terminal. You can continue using `uv run regress` from the checkout immediately.
+
+## Configure the API key
+
+Set `OPENAI_API_KEY` in the environment of the Python process, or add it to a `.env` file in the directory from which you launch Regress:
+
+```dotenv
+OPENAI_API_KEY=your-openai-api-key
+```
+
+The repository ignores its `.env` file in Git. Keep the key on the backend; the browser does not need it. Regress searches for `.env` from the current working directory upward. Passing a different project path to `regress serve` does not change that search location. Restart the API after changing the key.
+
+## Try the CLI
+
+From the repository root:
+
+```bash
+uv run regress run examples/src/cart.ts --baseline
+uv run regress report --project examples
+```
+
+The first command asks which available model to use, generates tests, checks them with Vitest, and improves them using Stryker's surviving mutants. `--baseline` also measures the existing tests before generation. This command makes paid API requests and writes the selected test file in `examples/`.
+
+## Start the web application
+
+Start the Python API in one terminal at the repository root:
+
+```bash
+uv run regress serve examples
+```
+
+In a second terminal, install and start the frontend from the same checkout:
+
+```bash
+cd web
+bun install --frozen-lockfile
+bun run dev
+```
+
+Open [the local application](http://127.0.0.1:5173). Vite proxies `/api` to `http://127.0.0.1:8765`, so frontend requests stay on the browser's current origin. Keep both processes running while using the application.
+
+The API also exposes [interactive API documentation](http://127.0.0.1:8765/api/docs) and [its OpenAPI schema](http://127.0.0.1:8765/api/openapi.json).
+
+## Verify the setup
+
+```bash
+curl http://127.0.0.1:8765/api/health
+curl http://127.0.0.1:8765/api/ready
+```
+
+`/api/health` reports liveness. `/api/ready` returns `200` only when the project, installed tools, API key presence, and writable artifact storage are ready; otherwise it returns `503`. Readiness does not test the key against OpenAI. The application's Project setup page lists missing prerequisites.
+
+Use one API server per project. Stop it before running CLI mutation jobs against the same project. To expose the application beyond your machine, follow [application deployment](/docs/deployment/application).
+
+Continue with [the CLI guide](/docs/using/cli), [the web application guide](/docs/using/web-app), or [setup for your own project](/docs/getting-started/project-setup).

@@ -1,0 +1,97 @@
+---
+title: Deploy the documentation
+description: Build this Fumadocs site as static files and host it with Docker, Coolify, or any static host.
+---
+
+This documentation is a [Fumadocs](https://fumadocs.dev) site in the repository's `docs/` directory. It builds to plain static files: HTML, JavaScript, CSS, and a search index. It needs no server, database, or API key, and is independent of the Regress application. Deploy it next to the application or on its own.
+
+## Work on the docs locally
+
+Requirements: Node.js 22 and Bun 1.3.
+
+```bash
+cd docs
+bun install --frozen-lockfile
+bun run dev
+```
+
+Open [the docs](http://127.0.0.1:3000). Pages reload as you edit them.
+
+| Path | Contents |
+| --- | --- |
+| `content/docs/**/*.mdx` | The pages. Front matter sets each page's `title` and `description`. |
+| `content/docs/**/meta.json` | Sidebar title and page order of each section. |
+| `app/page.tsx` | The landing page at `/`. |
+| `components/mdx.tsx` | Components available in MDX: `Cards`, `Card`, `Callout`, `Steps`, and `Step`. |
+| `lib/layout.shared.tsx` | Navigation links and the GitHub link. |
+
+To add a page, create an `.mdx` file in a section and list its file name, without the extension, in that section's `meta.json`. Link between pages with absolute paths such as `/docs/reference/configuration`.
+
+Check your changes before committing:
+
+```bash
+bun run typecheck
+bun run build
+```
+
+`bun run build` fails on broken MDX and on pages that are missing from the build. The **Docs** GitHub Actions workflow runs both commands and the Docker check below for every change under `docs/`.
+
+## Build the static site
+
+```bash
+cd docs
+bun run build
+bun run preview
+```
+
+`build` writes the site to `docs/out/`. `preview` serves that directory on `http://127.0.0.1:3000` so you can check the production output, including search.
+
+The site uses trailing-slash URLs: `/docs/reference/configuration/` is served from `out/docs/reference/configuration/index.html`. Search downloads the prebuilt index from `/api/search`; it is a static JSON file, not an API.
+
+## Deploy with Coolify
+
+1. Create a new **Dockerfile** application from this repository.
+2. Set **Base Directory** to `/docs` and the Dockerfile location to `Dockerfile`.
+3. Expose port `8080` and assign a domain, for example `https://docs.regress.example.com`.
+4. Set the health check path to `/healthz`.
+5. Deploy.
+
+The docs need no environment variables, volume, or authentication. They are public; don't put secrets in them. Unlike the application, they can run as several instances and redeploy with overlap.
+
+If you use Coolify's **Static** build pack instead, use `docs` as the base directory, `bun install --frozen-lockfile && bun run build` as the build command, and `out` as the publish directory.
+
+## Deploy with Docker
+
+Build from the repository root with `docs/` as the context:
+
+```bash
+docker build --tag regress-docs docs
+docker run --detach --name regress-docs --restart unless-stopped \
+  --publish 127.0.0.1:8081:8080 regress-docs
+```
+
+Open [http://127.0.0.1:8081](http://127.0.0.1:8081). Put your HTTPS reverse proxy in front of port `8080` in the container, the same way as for the application.
+
+The image builds the site with Node.js 22 and Bun, then serves `out/` with Nginx on port `8080`:
+
+- `/healthz` answers `200 ok` for health checks.
+- Missing pages return the site's 404 page.
+- Files under `/_next/static/` are content-hashed and cached for a year.
+- Redirects to trailing-slash URLs are relative, so they keep your domain and HTTPS behind a proxy.
+
+## Deploy to another static host
+
+Any host that serves a directory of files works, including GitHub Pages, Cloudflare Pages, Netlify, and an S3 bucket behind a CDN:
+
+| Setting | Value |
+| --- | --- |
+| Root directory | `docs` |
+| Install command | `bun install --frozen-lockfile` |
+| Build command | `bun run build` |
+| Output directory | `out` |
+
+The site expects to be served from the root of its domain. To serve it under a path such as `https://example.com/regress/`, set `basePath: '/regress'` in `docs/next.config.mjs` and rebuild.
+
+## Keep the docs next to the application
+
+The application's Docker image doesn't include the docs, so the two deploy and scale independently. Give them separate domains, for example `regress.example.com` for the password-protected application and `docs.regress.example.com` for the public docs.

@@ -1,0 +1,110 @@
+---
+title: Deploy the application
+description: Host the web app and Python API with Docker, Coolify, authentication, persistent storage, and recovery.
+---
+
+The root `Dockerfile` builds the React Router web app and Python API into one container. Nginx serves the frontend on port `8080`, protects it with HTTP Basic Authentication, and proxies `/api/` to a Python process on `127.0.0.1:8765`. Your hosting platform supplies HTTPS.
+
+This is the deployment for the Regress application that runs tests. The documentation website is a separate application under `docs/`; see [Deploy the documentation](/docs/deployment/documentation).
+
+## Deploy with Coolify
+
+1. Create a Dockerfile application from this repository. Use the repository root as the build context and `Dockerfile` as the build file.
+2. Expose container port `8080` to the platform's HTTPS proxy and assign your domain.
+3. Add the runtime variables below using the platform's environment or secret settings.
+4. Mount a dedicated persistent volume at `/data`.
+5. Configure a stop timeout of at least **30 seconds**, one application instance, and health checks at `/healthz`.
+6. Deploy and open your HTTPS domain. Sign in using your configured Basic Authentication credentials.
+
+| Variable | Value |
+| --- | --- |
+| `REGRESS_PUBLIC_ORIGIN` | The exact browser origin, such as `https://regress.example.com`. It must use HTTPS and have no path or trailing slash. |
+| `OPENAI_API_KEY` | A server-side OpenAI API key used for model requests. |
+| `REGRESS_BASIC_AUTH_USER` | A login name without colons or newlines. |
+| `REGRESS_BASIC_AUTH_PASSWORD` | A strong password for this instance. |
+
+The entrypoint requires the public origin and both authentication variables before starting. A missing API key leaves the application unready for model runs. The API key is never needed in a frontend build variable.
+
+## Deploy with Docker and an HTTPS proxy
+
+Build from the repository root:
+
+```bash
+docker build --tag regress:local .
+```
+
+Save the four runtime variables in a private environment file outside the repository, then run:
+
+```bash
+docker run --detach \
+  --name regress \
+  --restart unless-stopped \
+  --stop-timeout 30 \
+  --env-file /secure/path/regress.env \
+  --mount source=regress-data,target=/data \
+  --publish 127.0.0.1:8080:8080 \
+  regress:local
+```
+
+Route the HTTPS domain from `REGRESS_PUBLIC_ORIGIN` to this host's loopback port `8080` through your reverse proxy. If the proxy runs in another container, connect it through a private container network instead. Only Nginx port `8080` should be reachable by the proxy; keep Python port `8765` private.
+
+For Docker Compose, set `stop_grace_period: 30s`. When stopping manually, use `docker stop --time 30 regress`.
+
+## Persist the project and results
+
+| Container path | Stored data |
+| --- | --- |
+| `/data/project` | Served source files, installed project dependencies, test files, and `.regress` artifacts. |
+| `/data/config/regress/config.toml` | Personal application settings. |
+| `/data/cache/regress` | Cached model catalog data. |
+
+On startup, the entrypoint copies the bundled examples, including their installed dependencies, into `/data/project` **only if that directory has no `package.json`**. A normal redeploy preserves the existing project. It does not refresh the examples or dependencies already on the volume.
+
+The entrypoint assigns `/data` to the dedicated `regress` user. Use a dedicated application volume, since this changes ownership recursively. Back it up before maintenance and monitor its disk usage. Run and evaluation artifacts remain until removed; finished run artifacts can be deleted through `DELETE /api/runs/{id}`.
+
+To use another repository, stop the application, populate `/data/project` with that JavaScript or TypeScript package, and install its Vitest/Stryker dependencies there. Ensure the files are appropriate for the Linux container and the `regress` user can write to them. Preserve the previous project's volume or backup if its history is needed. Then start the application and check Project setup. The deployment serves one project per instance.
+
+## Verify authentication and readiness
+
+```bash
+curl --fail http://127.0.0.1:8080/healthz
+curl --include http://127.0.0.1:8080/api/health
+curl --user your-login https://regress.example.com/api/health
+```
+
+The second request should return `401`; the third prompts for your password. Substitute your login and domain.
+
+| Endpoint | Authentication | Meaning |
+| --- | --- | --- |
+| `/healthz` | None | Readiness: project settings, installed tools, API key presence, and writable artifact storage. Returns `200` or `503`. |
+| `/api/health` | Required through Nginx | Liveness and API version. |
+| `/api/ready` | Required through Nginx | The backend readiness result. |
+| `/api/project` | Required through Nginx | Project details and problems preventing a run. |
+
+The Docker image already includes a `/healthz` check with a 30-second interval, 5-second timeout, 60-second startup period, and three retries. Readiness does not call OpenAI or validate billing or model access. A busy worker remains ready, while a conflicting job submission returns `409`.
+
+`/healthz` exposes no project paths. All frontend and `/api/` routes require Basic Authentication in this deployment, including the interactive API documentation.
+
+## Run one instance per project
+
+Keep one application instance and one API worker for each writable project. An exclusive filesystem lock prevents a second API server from opening the same project. Runs, evaluations, and dependency installs share a reservation, including cancellation and cleanup.
+
+Stop the old container before starting its replacement against the same volume. Overlapping rolling deployments against one writable project are unsupported. Do not run standalone CLI mutation jobs against the project while the API is serving it.
+
+The entrypoint allows up to 25 seconds for service shutdown. Python first cancels workers cooperatively so it can restore source and test files, then escalates for stuck workers. Tini reaps orphaned child processes. This is why the platform must allow at least 30 seconds before forcing the container to stop.
+
+## Recovery after interruption
+
+Before a new API run starts, Regress saves a durable recovery record containing the original source and test bytes. If the container is killed before completion, the next startup restores those files and marks the unfinished run as failed. Completed results remain intact.
+
+Keep the run directory intact during recovery. Recovery waits for the previous worker's project lock to release and refuses invalid records. These records cover new API runs, not older runs or standalone CLI jobs.
+
+## Execution boundary and troubleshooting
+
+The API and generated tests run as the unprivileged `regress` user; Nginx starts as root and uses its normal worker account. Tests still execute code with access to the project and model credentials. Use one trusted repository and operator group per instance. Independent users or untrusted repositories require separate isolated workers, credentials, and storage.
+
+Set CPU and memory limits according to the project's Stryker workload. Keep the project in version control and stop job submissions before maintenance or backup restoration.
+
+For startup and runtime failures, inspect container logs and `/data/project/.regress/runs/<id>/report.json` and `events.jsonl`. Unexpected HTTP errors include `X-Request-ID` for finding the corresponding backend log entry. Tool logs retain the latest 1 MiB of output.
+
+A `503` response with `project: false` means to inspect the authenticated `/api/project` response for missing packages, invalid settings, or a missing key. `storage: false` means to check the volume's permissions and available space. Model failures after successful readiness can still indicate an invalid key, unavailable model, insufficient quota, or a network problem.

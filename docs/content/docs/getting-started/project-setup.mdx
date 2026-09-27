@@ -1,0 +1,94 @@
+---
+title: Set up a project
+description: Prepare your JavaScript or TypeScript project and select the source and test files Regress will use.
+---
+
+Regress works on one JavaScript or TypeScript source file and one Vitest test file per run. The source file belongs to the nearest parent directory containing a `package.json`.
+
+## Initialize your repository
+
+After [installing the CLI](/docs/getting-started/installation), switch to your application's package directory:
+
+```bash
+cd /path/to/your-project
+regress init
+```
+
+`regress init` checks installed packages, offers to install missing development dependencies, writes `regress.toml` if it does not exist, and creates a `.regress/` directory that ignores its contents in Git. Existing configuration is preserved.
+
+For an unattended installation, use:
+
+```bash
+regress init --yes
+```
+
+The required packages are `vitest`, `@stryker-mutator/core`, and `@stryker-mutator/vitest-runner`. Initialization uses the package manager indicated by the project's lockfile, checking Bun, pnpm, Yarn, and npm in that order. With no recognized lockfile, it uses Bun when available, otherwise npm. That package manager must be available on `PATH`.
+
+Vitest is installed as `vitest@^4` when missing; initialization also offers to replace Vitest 5 with Vitest 4. If you manage dependencies yourself, a Bun installation is:
+
+```bash
+bun add -d vitest@^4 @stryker-mutator/core @stryker-mutator/vitest-runner
+```
+
+Installed Vitest versions older than 2 are rejected when running a project. Upgrade these explicitly to Vitest 4. Regress reads installed versions from `node_modules`, including hoisted packages, so listing a package in `package.json` alone is insufficient.
+
+## Set the key and model
+
+Put `OPENAI_API_KEY` in your process environment or the project's `.env` file, then run commands from the project directory. You can list available models and choose a personal default with:
+
+```bash
+regress models
+```
+
+A `--model` flag chooses a model for a single run. `--yes` skips interactive questions and uses the effective configured default. Project settings in `regress.toml` can override personal settings. See the [configuration reference](/docs/reference/configuration) for precedence and available settings.
+
+## Choose the source and test file
+
+```bash
+regress run src/cart.ts --baseline
+```
+
+Regress accepts `.ts`, `.tsx`, `.mts`, `.cts`, `.js`, `.jsx`, `.mjs`, and `.cjs` source files. Pass the implementation file, not a file ending in `.test.*` or `.spec.*`.
+
+For `src/cart.ts`, Regress looks for matching `.test.*` or `.spec.*` files beside the source, in a neighboring `__tests__/` directory, and under the project's `test/`, `tests/`, `__tests__/`, and `spec/` directories. It also considers a unique matching file elsewhere when that file imports the source.
+
+Choose a test file explicitly when your layout is unusual or several candidates exist:
+
+```bash
+regress run src/cart.ts --test test/cart.test.ts
+```
+
+Paths passed on the CLI are relative to your current working directory. The test file must stay within the detected project and must differ from the source. If no existing test file is found, Regress creates one under an existing `test/` or `tests/` directory, preserving the source's relative directory layout without a leading `src/` or `lib/`. Otherwise it creates the test beside the source.
+
+Existing tests must pass against the current implementation. Regress preserves their test names and validates generated candidates before accepting them. It uses the implementation as the source of truth for regression behavior.
+
+## Use the project in the web application
+
+Run the installed CLI from your project directory:
+
+```bash
+regress serve .
+```
+
+Start the frontend from the Regress checkout as described in [Installation](/docs/getting-started/installation). The web app now shows this project's sources and history. Its Project setup page can install missing dependencies and write configuration through the API, but the API key must be set in the Python environment.
+
+For a monorepo, serve the package you want to test:
+
+```bash
+regress serve packages/my-library
+```
+
+The API serves one project root. A source inside another nested directory with its own `package.json` belongs to a different project and must be served separately. Export the key before this command if it is stored in a different directory's `.env` file.
+
+## Review the results
+
+```bash
+regress report
+regress report --list
+```
+
+The best valid tests remain in the selected test file. Run artifacts are stored under `.regress/runs/`, including accepted test snapshots, mutation reports, prompts, and responses. Review the diff and run your project's normal checks before committing. Regress executes generated tests with your process's access to files and credentials, so use a project and runtime you trust.
+
+Continue with [running from the CLI](/docs/using/cli), [using the web application](/docs/using/web-app), and [reading reports](/docs/reference/reports).
+
+Keep API runs and standalone CLI mutation jobs separate in time. The API coordinates its own runs, evaluations, and dependency installs, but standalone CLI jobs must not write to a project currently being served.

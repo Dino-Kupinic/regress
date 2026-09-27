@@ -1,0 +1,102 @@
+---
+title: Evaluations
+description: Compare existing tests, generated tests, and mutation-guided improvements against hidden bugs.
+---
+
+Mutation feedback guides Regress, so mutation score alone cannot show whether the resulting tests catch other regressions. Evaluations apply separately defined hidden bugs and check whether each test suite detects them.
+
+The bundled `examples/` project includes seven suites and 32 seeded bugs. Evaluation compares **Existing tests**, **One-shot AI**, and **Regress**, or checks **Existing tests** against hand-written **Oracle** tests without model requests.
+
+## Prepare and run
+
+From the repository root:
+
+```bash
+uv sync
+cd examples
+bun install
+cd ..
+uv run regress eval examples --oracle
+```
+
+Oracle evaluation requires Vitest and Stryker but no OpenAI API key. It checks the hand-written reference tests, measures mutation scores, and reports which hidden bugs are caught.
+
+For a full benchmark, set `OPENAI_API_KEY` and run:
+
+```bash
+uv run regress eval examples --yes
+```
+
+This calls the model for each selected module. Limit the scope while experimenting:
+
+```bash
+uv run regress eval examples --module cart --rounds 1 --yes
+uv run regress eval examples --module cart --module slugify --model MODEL_ID
+```
+
+`--module` is repeatable and uses the filename stem of a suite in `hidden-bugs/`. `--rounds` accepts 0–5. With no module filter, all suites are evaluated.
+
+Evaluation works in temporary project copies that share the installed `node_modules`. It saves its results to the original project's `.regress/eval/` directory. This keeps the evaluated source and generated test versions out of the working tree; it is not an isolation boundary for untrusted test code.
+
+## Use the web app
+
+Start the API with `uv run regress serve examples`, open **Evaluation**, and choose **Run evaluation**. Keep **Oracle only** enabled for the reference test check; disable it for a full benchmark.
+
+The web action evaluates all suites using the server's configured defaults. Use the CLI for module filters or invocation-specific model and round settings. The API accepts only `oracle` or `full` mode for this action.
+
+The page displays job output while work runs, then shows totals, per-module results, and saved evaluations. A run, another evaluation, or an installation must finish before an evaluation can start.
+
+## Read the results
+
+Each stage records a mutation score, a test count, and lists of caught and missed bug IDs. A hidden bug is applied by replacing an exact source fragment, then running Vitest. A non-successful test run with the bug applied counts as caught; the clean implementation must pass first.
+
+The two metrics answer different questions:
+
+| Metric | Meaning |
+| --- | --- |
+| Mutation score | How many valid Stryker mutations the selected test file detects. |
+| Hidden bugs caught | How many of the separately seeded regressions cause the test run to fail. |
+
+Totals count only modules with a result in every displayed column. Mutation totals are the mean of available module scores, while bug counts are summed. Check `counted_modules`, notes, and errors before comparing two benchmark runs.
+
+If the model cannot produce a valid generated test file after its repair attempts, both AI columns count as the existing tests and the module includes a note. Other failures, such as an API outage, may leave a module incomplete and outside the comparison totals. An oracle that misses a bug is reported; review the result rather than treating a completed command as proof that every bug was detected.
+
+## Find evaluation artifacts
+
+Results are written under:
+
+```text
+<project>/.regress/eval/<timestamp>/
+├── eval.md
+├── eval.json
+└── <module>/
+    └── ... saved run artifacts for full evaluations
+```
+
+`eval.md` is the human-readable comparison. `eval.json` includes module stages, errors, notes, counted modules, and totals. Full evaluations preserve individual pipeline artifacts, including failed or interrupted runs, so you can inspect their prompts and test files.
+
+Use Ctrl-C to interrupt a CLI evaluation. Results collected so far are saved. The web/API evaluation workflow has no evaluation-cancel endpoint; stopping the API stops its evaluation worker.
+
+## Add a benchmark suite
+
+Create a JSON file in the target project's `hidden-bugs/` directory. Its filename becomes the module name:
+
+```json
+{
+  "source": "src/limit.ts",
+  "test": "test/limit.test.ts",
+  "oracle": "oracle/limit.oracle.ts",
+  "bugs": [
+    {
+      "id": "rejects-exact-limit",
+      "description": "Rejects a value equal to the allowed limit.",
+      "find": "value > limit",
+      "replace": "value >= limit"
+    }
+  ]
+}
+```
+
+Adapt the paths and source fragments to actual files. Paths must be project-relative and cannot contain `..`. Every bug ID must be unique within the suite, and every nonempty `find` string must occur exactly once in the original source. The `oracle` path is required for oracle mode.
+
+Write reference tests that pass against the original implementation and detect the seeded regressions. Keep hidden bugs outside the model's feedback: the normal improvement loop uses Stryker mutations, while evaluation measures these separate regressions afterward.

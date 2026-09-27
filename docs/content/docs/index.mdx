@@ -1,0 +1,56 @@
+---
+title: Regress documentation
+description: Improve AI-generated regression tests with feedback from mutation testing.
+---
+
+Regress helps you find what your tests miss. It asks a model to write tests for a JavaScript or TypeScript source file, checks those tests with Vitest, and measures them with Stryker. Mutations that the tests fail to detect become concrete feedback for the next round.
+
+Use the **CLI** for a local project or the **web dashboard** to start runs and inspect results. Both use the same Python engine and save reports alongside the project.
+
+<Cards>
+  <Card title="Install for development" href="/docs/getting-started/installation">
+    Set up the backend and dashboard, then try the bundled examples.
+  </Card>
+  <Card title="Your first run" href="/docs/using">
+    Generate tests, follow a run, and review the result.
+  </Card>
+  <Card title="Bring your own project" href="/docs/getting-started/project-setup">
+    Prepare a Vitest project and select the source and test files.
+  </Card>
+  <Card title="Deploy Regress" href="/docs/deployment/application">
+    Run the application with Docker or Coolify and persistent storage.
+  </Card>
+</Cards>
+
+## The feedback loop
+
+1. **Check the starting point.** Regress loads the source and existing tests, verifies the toolchain, and runs the existing tests if present.
+2. **Generate and validate.** The model proposes a complete test file. Regress rejects candidates that fail, remove existing tests, mock the target module, skip tests, or change the source.
+3. **Measure with mutation testing.** Stryker changes the target implementation in small ways. A mutant is detected when the test run fails or times out. Surviving or uncovered mutants identify gaps to investigate.
+4. **Improve from feedback.** Regress sends a selection of undetected mutants to the model, validates its next proposal, and measures it again.
+5. **Review what was kept.** Improvement rounds keep a candidate only when its score is at least as high as the current candidate. Reports preserve stage details, test snapshots, tool logs, and model calls.
+
+The default run generates tests and performs one improvement round. Use `--baseline` to measure the existing tests before generation, or `--no-generate` to start improving the existing suite directly. A measured baseline is a comparison point; generation can replace it even when its mutation score is lower.
+
+## What you need
+
+- Python 3.13 or newer and uv for the engine.
+- Node.js and Bun for the JavaScript tools and dashboard.
+- A project with Vitest 2–4 and the Stryker Vitest runner. `regress init` can install missing packages.
+- An `OPENAI_API_KEY` available to the Python process for model-backed runs.
+
+Vitest 5 is currently rejected by the application. See [installation](/docs/getting-started/installation) for the complete setup and [configuration](/docs/reference/configuration) for model selection, budgets, and timeouts.
+
+## Understand the result
+
+A mutation score measures the fraction of valid mutants detected by a particular test file. It is useful feedback, but it is not proof that an implementation is correct. Regress treats the current implementation as the source of truth for regression tests, and a model's equivalent-mutant suggestions do not remove mutants from the score.
+
+Regress executes generated test code in your project. Review the kept changes before committing them. Use [reports and artifacts](/docs/reference/reports) to inspect exactly what happened, or the [HTTP API](/docs/reference/http-api) to integrate with your own tools.
+
+## Explore further
+
+- [Web dashboard](/docs/using/web-app): setup, new runs, stage details, and settings.
+- [CLI reference](/docs/using/cli): commands, options, and examples.
+- [Evaluations](/docs/using/evaluations): compare results on the bundled benchmark.
+- [Troubleshooting](/docs/reference/troubleshooting): toolchain, validation, API, and deployment problems.
+- [Host this documentation](/docs/deployment/documentation): build and deploy the static Fumadocs site.

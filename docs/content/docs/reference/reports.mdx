@@ -1,0 +1,109 @@
+---
+title: Reports and mutation scores
+description: What a run saves, how the mutation score is calculated, and how Regress decides which tests to keep.
+---
+
+Every run writes a directory under the project's `.regress/runs/`. The directory name is the run ID: a timestamp followed by the source file's name, for example `20260926-230928-defu`. `.regress/` contains a `.gitignore` that keeps all of it out of Git.
+
+## Run directory
+
+```text
+.regress/runs/20260926-230928-defu/
+├── report.json            # the report shown by `regress report` and the web app
+├── events.jsonl           # progress log (API runs only)
+├── tests/
+│   ├── 0-baseline.test.ts   # the test file at each stage
+│   ├── 1-generated.test.ts
+│   └── 2-improved.test.ts
+├── llm/
+│   ├── 01-generated-attempt1.prompt.md
+│   └── 01-generated-attempt1.response.json
+├── vitest/
+│   ├── baseline.json        # Vitest JSON reports and logs
+│   └── baseline.log
+└── stryker/
+    ├── mutation-1.json      # Stryker mutation reports
+    ├── stryker-1.config.json
+    └── stryker-1.log
+```
+
+Each model call saves its prompt and raw response under `llm/`, named by call number, stage, and attempt. Each validation saves a Vitest report and log; each mutation run saves Stryker's report, configuration, and log. Tool logs keep the last 1 MiB of output.
+
+While an API run is in progress its directory also holds `.api-recovery.json`, the record used to restore the source and test files if the server is killed. It is removed when the run ends. Leave it in place after a crash; see [recovery](/docs/deployment/application#recovery-after-interruption).
+
+Read a report with:
+
+```bash
+regress report                 # the latest run
+regress report --list          # all runs
+regress report 20260926-230928-defu --mutants 25
+regress report defu --json     # raw report.json
+```
+
+The web app shows the same data on each run's page, and serves every file on the **Overview** tab's artifact list.
+
+## Stages
+
+A run records one stage per version of the test file:
+
+| Stage | When | What it measures |
+| --- | --- | --- |
+| **Existing tests** (`baseline`) | Always, when a test file exists. Mutation-tested only with `--baseline` or `--no-generate`. | The tests you already had. |
+| **Generated tests** (`generated`) | Unless `--no-generate`. | The model's first proposal, after validation. |
+| **Improved tests** (`improved`) | Once per improvement round. | A proposal that targets the previous stage's undetected mutants. |
+
+A proposal that still fails validation after `max_repairs` retries is recorded as a **rejected** stage with its problems. Rejected stages are shown in the report but never kept.
+
+## Mutation score
+
+Stryker changes the source file in small ways, one mutant at a time, and runs the selected test file against each change.
+
+| Status | Counts as | Meaning |
+| --- | --- | --- |
+| Killed | detected | A test failed with the mutant applied. |
+| Timeout | detected | The tests ran too long with the mutant applied, which usually means an infinite loop was introduced. |
+| Survived | undetected | Tests covered the mutated code, but all passed. |
+| No coverage | undetected | No test ran the mutated code. |
+| Compile or runtime error | excluded | The mutant could not run at all. |
+
+The score is:
+
+```text
+score = (killed + timeout) / (killed + timeout + survived + no coverage) × 100
+```
+
+Only the selected source file is mutated, and only the selected test file runs. The score describes how well that one test file pins down that one source file. It is not coverage for the whole project, and a high score does not prove the implementation is correct.
+
+When the model claims a mutant is equivalent (it cannot change behaviour), the report lists the claim, but the mutant still counts in the score.
+
+## Which tests are kept
+
+- **Generated tests** replace the existing tests when they pass validation, even if the existing tests scored higher. A measured baseline is shown for comparison only.
+- An **improvement** replaces the current tests when its score is equal to or higher than the current score. A lower-scoring improvement is recorded, and the previous version stays.
+- With `--no-generate`, the existing tests are the starting point, and improvements are compared against them.
+
+The report's `kept_stage` names the stage whose test file is left in your project. The **change** shown in the CLI, the Runs table, and the run page is the kept score minus the score of the generated tests, or of the existing tests with `--no-generate`.
+
+If a run fails or is cancelled, Regress restores the original source and test file. The artifacts stay in the run directory for diagnosis.
+
+## Report fields
+
+`report.json` is the serialized run. The main fields:
+
+| Field | Meaning |
+| --- | --- |
+| `id`, `created_at` | Run ID and start time with time zone. |
+| `source_file`, `test_file`, `test_file_existed` | Files relative to `project_root`, and whether the test file existed before the run. |
+| `model` | Model used for the run. |
+| `status`, `error` | `running`, `completed`, `failed`, or `cancelled`, and the error message if any. |
+| `stages[]` | Each stage's `kind`, `label`, `test_count`, `test_names`, `mutation` results, model `summary`, `attempts`, `llm_seconds`, `targeted_mutants`, `equivalent_mutants`, `rejected`, and `problems`. |
+| `stages[].mutation` | The Stryker run: `mutants[]` with status, operator, location, and covering tests, plus `killed`, `survived`, `no_coverage`, `timeout`, `errors`, and `score`. |
+| `kept_stage` | Label of the kept stage. |
+| `usage` | Model `calls`, `input_tokens`, and `output_tokens` for the whole run. |
+| `duration_seconds` | Wall-clock time of the finished run. |
+
+`events.jsonl` has one JSON object per line with `seq`, `time`, `type`, `message`, and `data`. It is the log the web app shows while a run is live, and the source of [`GET /api/runs/{id}/events`](/docs/reference/http-api#follow-a-run).
+
+## Delete old runs
+
+Artifacts are kept until you remove them. Delete a finished run's directory, or call `DELETE /api/runs/{id}` on a running API. Deleting a run does not touch the test file in your project.

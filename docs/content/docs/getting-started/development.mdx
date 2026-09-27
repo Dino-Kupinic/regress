@@ -1,0 +1,103 @@
+---
+title: Develop Regress
+description: Understand the repository structure and run the checks used to develop the CLI, API, and web application.
+---
+
+Follow [Installation](/docs/getting-started/installation) to install Python, example-project, and web dependencies. The Python API and React frontend run as separate processes during development.
+
+## Repository structure
+
+| Path | Responsibility |
+| --- | --- |
+| `src/regress/cli.py` | Typer commands for initialization, runs, reports, models, evaluation, and serving the API. |
+| `src/regress/pipeline.py` | Generation, validation, mutation testing, improvement, and selection of the best tests. |
+| `src/regress/project.py` | Project roots, installed tool versions, source imports, and test-file discovery. |
+| `src/regress/vitest.py`, `stryker.py` | Vitest and Stryker process adapters and report parsing. |
+| `src/regress/validate.py` | Candidate test-file checks. |
+| `src/regress/llm.py`, `prompts.py`, `mutants.py` | Model requests, prompts, and mutation feedback. |
+| `src/regress/config.py`, `catalog.py`, `store.py` | Layered settings, model catalog, and run artifacts. |
+| `src/regress/api/` | FastAPI routes, schemas, background workers, streaming events, and recovery. |
+| `src/regress/evaluation.py` | Evaluation against the bundled hidden bugs. |
+| `web/app/` | React Router application, pages, components, and API client. |
+| `examples/` | Vitest/Stryker project, weak initial tests, hidden bugs, and oracle suites. |
+| `tests/` | Python unit and integration tests. |
+| `deploy/`, `Dockerfile` | Authenticated Nginx proxy, process entrypoint, and production image. |
+| `docs/` | This Fumadocs documentation application. |
+
+The browser calls `/api`. Vite forwards those requests to Python during development; Nginx does the same in the production container. The backend owns the API key, configuration, project files, and run processes.
+
+## Backend checks
+
+Run from the repository root:
+
+```bash
+uv sync --frozen --python 3.13
+uv run ruff check src tests
+uv run ruff format --check src tests
+uv run pytest -m "not integration"
+```
+
+Install the examples before running the full suite:
+
+```bash
+cd examples
+bun install --frozen-lockfile
+cd ..
+uv run pytest
+```
+
+Integration tests use real Vitest and Stryker with a scripted model. They cover candidate repair and rollback, creating tests, improved mutation scores, hidden-bug checks, and API run, stream, and cancellation behavior. They do not call OpenAI. Tests isolate personal configuration and remove model-related environment variables. Integration tests that require the examples skip when Bun or the installed example dependencies are missing; inspect the test summary to confirm the checks you intended actually ran.
+
+## Frontend checks
+
+Run from `web/`:
+
+```bash
+bun run typecheck
+bun run check
+bun run test
+bun run build
+```
+
+These run TypeScript, Biome, Vitest, and the React Router production build. The production frontend is a static SPA emitted to `web/build/client/`. In development, `bun run dev` listens on `127.0.0.1:5173` and proxies `/api` to port `8765`.
+
+## Exercise the API
+
+With the API running against the examples, use these read-only endpoints:
+
+```bash
+curl http://127.0.0.1:8765/api/health
+curl http://127.0.0.1:8765/api/ready
+curl http://127.0.0.1:8765/api/project
+```
+
+Interactive request documentation is available at `/api/docs`, and `/api/openapi.json` contains the request and response schema. See the [HTTP API reference](/docs/reference/http-api) for the endpoint guide. A submitted run executes in its own process. The API reserves one project for runs, evaluations, and dependency installation; competing submissions return `409`.
+
+Unexpected API errors include an `X-Request-ID` header to correlate with backend logs. Saved API runs include an `events.jsonl` progress log alongside `report.json` in the run directory.
+
+## Check the example benchmark
+
+The oracle benchmark verifies the hand-written reference suites against known hidden bugs without using an API key:
+
+```bash
+uv run regress eval examples --oracle
+```
+
+The full comparison runs the model and requires a key:
+
+```bash
+uv run regress eval examples
+```
+
+Evaluation saves its results under `examples/.regress/eval/`. Stop the API serving `examples/` before running these CLI benchmarks. The [evaluation guide](/docs/using/evaluations) explains the comparison and how to interpret its results.
+
+## Production checks
+
+The Backend GitHub Actions workflow runs Python formatting, linting, and tests, then builds the root Docker image. Its container checks cover readiness, authentication, and the unprivileged Vitest/Stryker toolchain. To build that image locally:
+
+```bash
+bash -n deploy/start.sh
+docker build --tag regress:local .
+```
+
+Use [Application deployment](/docs/deployment/application) for runtime variables, persistent storage, graceful shutdown, and health checks.

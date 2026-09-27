@@ -1,0 +1,112 @@
+---
+title: Your first run
+description: Generate regression tests, inspect mutation feedback, and review the tests Regress keeps.
+---
+
+Regress improves tests for one JavaScript or TypeScript source file at a time. It asks an OpenAI model to extend a test file, validates the result with Vitest, and uses surviving StrykerJS mutations to guide another round of test writing.
+
+The CLI and web app use the same engine. A successful run writes its selected tests into your project and saves the report and intermediate files under `.regress/`.
+
+## Try the example project
+
+From a checkout of Regress, install the Python dependencies and example toolchain:
+
+```bash
+uv sync --frozen --python 3.13
+cd examples
+bun install --frozen-lockfile
+cd ..
+```
+
+These commands require Python 3.13+, uv, Node.js, and Bun. The target project needs Vitest 2–4, `@stryker-mutator/core`, and `@stryker-mutator/vitest-runner`. The bundled examples already declare them.
+
+Set `OPENAI_API_KEY` in the shell that will run Regress, or in a `.env` file in the directory from which you launch it. For example:
+
+```dotenv
+OPENAI_API_KEY=your-api-key
+```
+
+Keep the real key out of version control. Regress reads it in Python; the browser does not need it.
+
+Start a run from the repository root:
+
+```bash
+uv run regress run examples/src/cart.ts --baseline
+```
+
+In an interactive terminal, Regress asks which model to use unless you have disabled the prompt or supplied a model. Press Enter to use the configured default. A run makes model requests and uses your API account's credits.
+
+Regress finds `examples/test/cart.test.ts`, checks that its existing tests pass, measures them because of `--baseline`, generates additional tests, and runs one improvement round by default.
+
+## Use the web app
+
+Run the API from the repository root:
+
+```bash
+uv run regress serve examples
+```
+
+In a second terminal:
+
+```bash
+cd web
+bun install --frozen-lockfile
+bun run dev
+```
+
+Open [the local web app](http://127.0.0.1:5173), choose **New run**, select `src/cart.ts`, enable **Measure baseline**, and choose **Start run**. The API serves the `examples` project, so paths in the browser are relative to that directory.
+
+The run continues in the API process when you navigate away. Open **Runs** to return to it. See [Using the web app](/docs/using/web-app) for the full workflow.
+
+## Use your own project
+
+Install Regress as a local command from its checkout:
+
+```bash
+uv tool install .
+```
+
+Then enter the JavaScript or TypeScript project you want to test:
+
+```bash
+cd /path/to/your/project
+regress init
+regress run src/cart.ts --baseline
+```
+
+`regress init` checks installed packages, offers to install missing test dependencies using your project's package manager, creates `regress.toml` if absent, and prepares `.regress/` for artifacts. It needs an existing `package.json`.
+
+Choose a source file, rather than a test file. Regress searches for a matching test next to the source, in `__tests__/`, or under `test/`, `tests/`, and `spec/`. It creates a test file when none is found. Use `--test` when you need to choose explicitly:
+
+```bash
+regress run src/cart.ts --test tests/cart.spec.ts
+```
+
+To serve your own project in the web app, use `regress serve /path/to/your/project` as the API command. Each API instance serves one project. Stop it before running CLI mutation jobs against that same project.
+
+## Understand the result
+
+The pipeline has three kinds of stage:
+
+1. **Existing tests:** run the current tests; optionally measure their mutation score.
+2. **Generated tests:** ask the model to add tests and validate them, then run Stryker.
+3. **Improved tests:** send undetected mutations to the model, validate the next proposal, and measure again.
+
+Candidates must import the real module, avoid focused or skipped tests, preserve existing test names, add at least one test, pass against the current implementation, and leave the source unchanged. Regress can send invalid candidates back for repair.
+
+An improvement replaces the current test file when its mutation score is equal or higher. If it scores lower, Regress keeps the preceding version. This comparison starts from the generated stage, or the existing tests when generation is skipped. Measuring a baseline does not make the baseline a fallback for a lower-scoring first generation.
+
+The mutation score measures what the selected test file detects in the selected source file. It does not measure the entire test suite or prove the implementation is correct. Read [Reports and mutation scores](/docs/reference/reports) for the score formula and stage comparison rules.
+
+## Review and keep the tests
+
+After the example run, inspect the saved report and working-tree diff:
+
+```bash
+uv run regress report --project examples
+git diff -- examples/test/cart.test.ts
+```
+
+Run your project's normal checks before committing the generated tests. Regress executes model-written tests locally; review them as you would any proposed code change.
+
+Use Ctrl-C in the CLI or **Cancel run** in the browser to stop a run. Normal failure or cancellation restores the original target test file and source bytes. The saved artifacts remain available for diagnosis.
