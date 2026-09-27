@@ -111,7 +111,9 @@ A finished run replays its log and ends straight away.
 
 ## One job at a time
 
-The server runs one project operation at a time: a run, an evaluation, or a dependency install. Starting another while one is active returns `409` with a message that names what is running. A second API server for the same project does not own it while the first holds the lock. It still answers `/api/ready` during that wait, then the process exits if the lock is still held after 30 seconds.
+The server runs one project operation at a time: a run, an evaluation, or a dependency install. Starting another while one is active returns `409` with a message that names what is running. An exclusive filesystem lock prevents two API servers from changing the same project.
+
+During a rolling restart, the replacement server answers `/api/ready` while waiting up to 30 seconds for the previous server to release that lock. Run, evaluation, and dependency-install submissions return `503` during this handoff; retry after the replacement takes ownership. If the old server does not release the project in time, the replacement exits.
 
 ## Errors
 
@@ -130,4 +132,4 @@ Errors have a JSON body with `detail` and, for tool failures, `output`:
 | `413` | The request body is larger than 1 MiB. |
 | `422` | The request body does not match the schema. |
 | `500` | Vitest, Stryker, or the package manager failed (`output` has its log), or an unexpected error occurred (check the log for the `X-Request-ID`). |
-| `503` | The model request failed, or `/ready` reports the project is not ready. |
+| `503` | The model request failed, the server is taking ownership of the project or shutting down, or `/ready` reports the project is not ready. |

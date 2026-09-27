@@ -139,10 +139,11 @@ Or copy the directory into your agent's skills folder, such as `~/.claude/skills
 3. **Validate the tests.** A candidate is accepted only if all of these hold:
    - it imports the real module under test and doesn't mock it
    - it has no `.only`, and it does not add `.skip`, `.todo`, `.fails`, `.skipIf`, or `.runIf` beyond what the previous file already had
+   - it adds no skipped or todo tests, including tests skipped at runtime
    - it passes against the original implementation in Vitest, with no errors outside the tests (a failing hook, an unhandled rejection)
    - Vitest finishes within `vitest_timeout` seconds. A test that never ends is stopped and sent back like any other problem
-   - every existing test survives with the same name
-   - it adds at least one test
+   - every existing test survives with the same name, and every previously passing test still runs and passes
+   - it adds at least one test that runs and passes; pre-existing skipped tests may remain skipped
    - the source file is unchanged afterwards
 
    Rejected candidates go back to the model with the exact errors (up to `max_repairs` times). The implementation is treated as the source of truth, because these are regression tests.

@@ -9,7 +9,7 @@ from pathlib import Path
 from regress.errors import CandidateRejected, RegressError
 from regress.files import atomic_write_text
 from regress.llm import LLM, Completion
-from regress.models import RunReport, Stage, StageKind
+from regress.models import RunReport, Stage, StageKind, TestRunResult, TestStatus
 from regress.mutants import describe_mutant, select_mutants
 from regress.project import Project
 from regress.prompts import INSTRUCTIONS, PromptContext, generate_prompt, improve_prompt, repair_prompt
@@ -37,6 +37,7 @@ class Version:
 
     stage: Stage
     content: str | None
+    result: TestRunResult | None = None
 
     @property
     def score(self) -> float:
@@ -118,8 +119,10 @@ class Pipeline:
             self.reporter.generated(baseline.stage, current.stage)
             self._mutate(current)
         else:
-            if baseline.content is None or baseline.stage.test_count == 0:
-                raise RegressError("--no-generate needs an existing test file with at least one test to improve.")
+            if baseline.result is None or not any(test.status == TestStatus.PASSED for test in baseline.result.tests):
+                raise RegressError(
+                    "--no-generate needs an existing test file with at least one passing test to improve."
+                )
             current = baseline
             if current.stage.mutation is None:
                 self._mutate(current)
@@ -153,6 +156,7 @@ class Pipeline:
     def _baseline(self) -> Version:
         stage = Stage(kind="baseline", label="Existing tests")
         content = self.workspace.original_tests
+        result = None
         if content is not None:
             try:
                 with self.reporter.activity("Running existing tests"):
@@ -170,10 +174,14 @@ class Pipeline:
             stage.test_count = result.total
             stage.test_names = sorted(result.names)
         self.report.stages.append(stage)
-        version = Version(stage, content)
+        version = Version(stage, content, result)
         self._snapshot(version)
         self.reporter.baseline(stage, exists=content is not None)
-        if content is not None and stage.test_count > 0 and self.options.measure_baseline:
+        if (
+            self.options.measure_baseline
+            and result is not None
+            and any(test.status == TestStatus.PASSED for test in result.tests)
+        ):
             self._mutate(version)
         return version
 
@@ -204,6 +212,7 @@ class Pipeline:
                     output_dir=self.run_dir / "vitest",
                     name=name,
                     timeout=self.options.vitest_timeout,
+                    previous_result=previous.result,
                 )
             if check.ok and check.result is not None:
                 proposal = completion.proposal
@@ -220,7 +229,7 @@ class Pipeline:
                     equivalent_mutants=[i for i in proposal.equivalent_mutants if i in targeted],
                 )
                 self.report.stages.append(stage)
-                version = Version(stage, content)
+                version = Version(stage, content, check.result)
                 self._snapshot(version)
                 return version
             problems = check.problems

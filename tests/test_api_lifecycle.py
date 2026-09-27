@@ -212,6 +212,87 @@ def test_startup_waits_for_the_previous_server_to_release_the_project(js_project
         second.shutdown()
 
 
+@pytest.mark.parametrize("initial_claim", ["startup", "reservation"])
+def test_pending_project_claim_rejects_mutations_without_competing_for_the_lock(js_project, monkeypatch, initial_claim):
+    holder = RunManager(js_project)
+    replacement = RunManager(js_project)
+    holder.startup(lock_timeout=0)
+    replacement.replacing = initial_claim == "startup"
+    claiming = threading.Event()
+    descriptors = []
+    lock_project = replacement._lock_project
+
+    def tracked_claim(descriptor, lock_timeout):
+        descriptors.append(descriptor)
+        claiming.set()
+        lock_project(descriptor, lock_timeout=2)
+
+    monkeypatch.setattr(replacement, "_lock_project", tracked_claim)
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            pending = executor.submit(
+                replacement.startup if initial_claim == "startup" else lambda: replacement.reserve("installing")
+            )
+            try:
+                assert claiming.wait(timeout=1)
+                with pytest.raises(HTTPException, match="waiting for the previous server") as rejected:
+                    replacement.start(RunRequest(source="src/math.ts"))
+                assert rejected.value.status_code == 503
+                with pytest.raises(HTTPException) as rejected, replacement.exclusive("installing"):
+                    pass
+                assert rejected.value.status_code == 503
+                assert len(descriptors) == 1, "a mutation opened a competing project-lock descriptor"
+            finally:
+                holder.shutdown()
+            release = pending.result(timeout=3)
+            if release is not None:
+                release()
+        with replacement.exclusive("installing"):
+            pass
+        assert len(descriptors) == 1
+        assert not replacement.replacing
+    finally:
+        holder.shutdown()
+        replacement.shutdown()
+
+
+def test_concurrent_startup_callers_share_one_project_claim(js_project, monkeypatch):
+    holder = RunManager(js_project)
+    replacement = RunManager(js_project)
+    holder.startup(lock_timeout=0)
+    claiming, waiting = threading.Event(), threading.Event()
+    descriptors = []
+    lock_project = replacement._lock_project
+    wait = replacement._claim_condition.wait
+
+    def tracked_claim(descriptor, lock_timeout):
+        descriptors.append(descriptor)
+        claiming.set()
+        lock_project(descriptor, lock_timeout=2)
+
+    def tracked_wait():
+        waiting.set()
+        return wait()
+
+    monkeypatch.setattr(replacement, "_lock_project", tracked_claim)
+    monkeypatch.setattr(replacement._claim_condition, "wait", tracked_wait)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            first = executor.submit(replacement.startup)
+            try:
+                assert claiming.wait(timeout=1)
+                second = executor.submit(replacement.startup)
+                assert waiting.wait(timeout=1)
+            finally:
+                holder.shutdown()
+            first.result(timeout=3)
+            second.result(timeout=3)
+        assert len(descriptors) == 1
+    finally:
+        holder.shutdown()
+        replacement.shutdown()
+
+
 def test_one_api_server_per_project_and_shutdown_rejects_new_work(js_project):
     first = RunManager(js_project)
     second = RunManager(js_project)

@@ -1,7 +1,8 @@
+import pytest
 from conftest import load_fixture
 
 from regress.models import Mutant, MutantStatus, MutationRun
-from regress.mutants import describe_mutant, select_mutants, short_description
+from regress.mutants import describe_mutant, mutated_line, select_mutants, short_description
 from regress.prompts import PromptContext, generate_prompt, improve_prompt, repair_prompt
 from regress.stryker import parse_stryker_report
 
@@ -58,6 +59,52 @@ def test_short_description_ignores_a_source_edited_after_the_run():
     fallback = "qty >= max  →  qty > max"
     assert short_description(m, ["export const x = 1;\n"]) == fallback  # file got shorter
     assert short_description(m, ["// new header\n", *LINES]) == fallback  # lines shifted
+
+
+@pytest.mark.parametrize(("value", "mutated"), [("1", "0"), ("11", "01")])
+def test_mutant_descriptions_use_javascript_utf16_columns(value, mutated):
+    source = f'const emoji = "😀"; return {value};\n'
+    report = {
+        "files": {
+            "src/example.ts": {
+                "source": source,
+                "mutants": [
+                    {
+                        "id": "1",
+                        "mutatorName": "NumberLiteral",
+                        "status": "Survived",
+                        "replacement": "0",
+                        "location": {"start": {"line": 1, "column": 28}, "end": {"line": 1, "column": 29}},
+                    }
+                ],
+            }
+        }
+    }
+    [m] = parse_stryker_report(report, "src/example.ts", 1).mutants
+    original_line = source.rstrip("\n")
+    mutated_text = f'const emoji = "😀"; return {mutated};'
+
+    assert m.original == "1"
+    assert mutated_line(m, [source]) == (original_line, mutated_text)
+    assert f"mutated:  {mutated_text}" in describe_mutant(m, [source], "src/example.ts")
+    assert short_description(m, [source]) == f"{original_line}  →  {mutated_text}"
+
+
+@pytest.mark.parametrize(
+    ("start_line", "start_column", "end_column"),
+    [(0, 1, 2), (1, 0, 1), (1, 1, 100), (1, 3, 2), (1, 16, 17)],
+)
+def test_mutant_description_ignores_invalid_or_stale_coordinates(start_line, start_column, end_column):
+    source = 'const emoji = "😀"; return 1;'
+    m = mutant("1", start_line).model_copy(
+        update={
+            "start_column": start_column,
+            "end_column": end_column,
+            "original": source[start_column - 1 : end_column - 1],
+        }
+    )
+    # Columns 16..17 split the emoji's surrogate pair, so cannot identify a valid source span.
+    assert mutated_line(m, [source]) is None
 
 
 CTX = PromptContext(
