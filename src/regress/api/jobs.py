@@ -48,6 +48,7 @@ from regress.ui import Reporter, format_delta, format_score
 log = logging.getLogger("regress.api")
 
 CANCEL_GRACE_SECONDS = 15.0  # then the run is killed, and the server restores the test file itself
+LOCK_WAIT_SECONDS = 30.0  # long enough for a previous container's stop timeout to release the project
 STATUS_INTERVAL = 0.25  # at most this often, the model's streaming status is passed on
 WATCHDOG_INTERVAL = 2.0
 RECOVERY_FILE = ".api-recovery.json"
@@ -527,29 +528,31 @@ class RunManager:
         self._busy: str | None = None
         self._reservation: object | None = None
         self._closed = False
+        self.replacing = False  # answering health checks while the previous server still holds the project
         self._problem: str | None = None
         self._project_lock: int | None = None
         self._summaries: dict[str, tuple[int, RunSummary]] = {}
 
-    def startup(self) -> None:
-        """Claim this project for one API process, including across Uvicorn workers."""
+    def startup(self, *, lock_timeout: float = LOCK_WAIT_SECONDS) -> None:
+        """Claim this project for one API process, including across Uvicorn workers.
+
+        A replacement process waits until `lock_timeout` for the previous server to exit. Rolling
+        deploys start the new container while the old one is still shutting down; failing the lock
+        immediately kills that container before the platform can finish the handoff.
+        """
         with self._lock:
             if self._closed:
                 raise RuntimeError("The run manager has already shut down.")
-            self._claim_project()
+            self._claim_project(lock_timeout)
+            self.replacing = False
 
-    def _claim_project(self) -> None:
+    def _claim_project(self, lock_timeout: float = LOCK_WAIT_SECONDS) -> None:
         if self._project_lock is not None:
             return
         path = regress_dir(self.root) / "api.lock"
         descriptor = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
         try:
-            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as error:
-            os.close(descriptor)
-            raise RuntimeError(
-                f"Another Regress API server already owns {self.root}. Run one server with one worker per project."
-            ) from error
+            self._lock_project(descriptor, lock_timeout)
         except BaseException:
             os.close(descriptor)
             raise
@@ -560,6 +563,42 @@ class RunManager:
             os.close(descriptor)
             self._project_lock = None
             raise
+
+    def _lock_project(self, descriptor: int, lock_timeout: float) -> None:
+        deadline = time.monotonic() + lock_timeout
+        announced = False
+        while True:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return
+            except BlockingIOError as error:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise RuntimeError(
+                        f"Another Regress API server already owns {self.root}. "
+                        "Run one server with one worker per project."
+                    ) from error
+                if not announced:
+                    log.warning(
+                        "Waiting up to %.0fs for the other API server to release %s",
+                        lock_timeout,
+                        self.root,
+                    )
+                    announced = True
+                # Let shutdown run while the previous server is still exiting.
+                self._lock.release()
+                try:
+                    time.sleep(min(0.2, remaining))
+                finally:
+                    self._lock.acquire()
+                if self._closed:
+                    break
+        if self._closed:
+            raise RuntimeError("The run manager has already shut down.")
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
 
     @property
     def lock_descriptor(self) -> int:

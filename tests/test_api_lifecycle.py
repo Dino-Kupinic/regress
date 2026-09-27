@@ -15,9 +15,11 @@ from types import SimpleNamespace
 import pytest
 from conftest import slow_llm
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 
 from regress.api import evaluations as evaluation_api
 from regress.api import jobs
+from regress.api.app import create_app
 from regress.api.evaluations import EvaluationManager
 from regress.api.jobs import Job, RunManager, RunSpec
 from regress.api.schemas import RunRequest
@@ -176,13 +178,47 @@ def test_failed_run_spawn_releases_reservation(js_project, monkeypatch):
         manager.shutdown()
 
 
+def test_rolling_handoff_answers_ready_while_the_previous_server_holds_the_lock(js_project):
+    holder = RunManager(js_project)
+    holder.startup(lock_timeout=0)
+    try:
+        with TestClient(create_app(js_project), base_url="http://127.0.0.1") as client:
+            assert client.get("/api/ready").status_code == 200
+            assert client.app.state.manager.replacing
+            holder.shutdown()
+            deadline = time.monotonic() + 5
+            while client.app.state.manager.replacing:
+                assert time.monotonic() < deadline
+                time.sleep(0.05)
+            assert client.app.state.manager.lock_descriptor >= 0
+    finally:
+        holder.shutdown()
+
+
+def test_startup_waits_for_the_previous_server_to_release_the_project(js_project):
+    first = RunManager(js_project)
+    second = RunManager(js_project)
+    first.startup(lock_timeout=0)
+
+    def release() -> None:
+        time.sleep(0.3)
+        first.shutdown()
+
+    threading.Thread(target=release).start()
+    try:
+        second.startup(lock_timeout=2)
+    finally:
+        first.shutdown()
+        second.shutdown()
+
+
 def test_one_api_server_per_project_and_shutdown_rejects_new_work(js_project):
     first = RunManager(js_project)
     second = RunManager(js_project)
     try:
         first.startup()
         with pytest.raises(RuntimeError, match="one worker per project"):
-            second.startup()
+            second.startup(lock_timeout=0)
         first.shutdown()
         second.startup()
         with pytest.raises(HTTPException) as rejected:
@@ -370,7 +406,7 @@ def test_live_worker_keeps_project_lock_if_server_loses_its_descriptor(js_projec
         os.close(manager.lock_descriptor)
         manager._project_lock = None
         with pytest.raises(RuntimeError, match="one worker per project"):
-            contender.startup()
+            contender.startup(lock_timeout=0)
         manager.shutdown()
         assert job.done.is_set()
         contender.startup()

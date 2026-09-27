@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -50,7 +52,26 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        manager.startup()
+        # A rolling deploy starts this container before stopping the previous one. That previous
+        # process still holds the project lock, so refuse to block startup on it: answer health
+        # checks first, which is what lets the platform stop the previous container.
+        takeover: asyncio.Task[None] | None = None
+        try:
+            manager.startup(lock_timeout=0)
+        except RuntimeError as error:
+            if "already owns" not in str(error):
+                raise
+            manager.replacing = True
+
+            async def take_over() -> None:
+                try:
+                    await anyio.to_thread.run_sync(manager.startup)
+                except Exception:
+                    logger.exception("Regress could not take over %s", manager.root)
+                    if not manager.closed:
+                        os._exit(1)
+
+            takeover = asyncio.create_task(take_over())
         try:
             yield
         finally:
@@ -58,6 +79,8 @@ def create_app(
                 await anyio.to_thread.run_sync(evaluations.shutdown)
             finally:
                 await anyio.to_thread.run_sync(manager.shutdown)
+            if takeover is not None:
+                await takeover
 
     app = FastAPI(
         title="Regress",

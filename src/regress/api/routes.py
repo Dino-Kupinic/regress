@@ -107,6 +107,10 @@ def readiness(manager: Manager, response: Response) -> Readiness:
     Does not contact OpenAI or disclose project paths or configuration values.
     A busy worker remains ready; concurrent job submissions receive 409.
     """
+    if manager.replacing:
+        # The previous container is still shutting down. Report ready so the platform stops it
+        # and this process can take the project lock.
+        return Readiness(status="ready", project=True, storage=True)
     project_ready = projects.project_info(manager).ready
     storage_ready = True
     try:
