@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 from pathlib import Path
 
 from fastapi import HTTPException
@@ -37,7 +38,6 @@ from regress.project import (
     is_test_file,
     package_version,
     planned_installs,
-    walk_files,
 )
 from regress.store import regress_dir
 
@@ -103,24 +103,34 @@ def init_project(manager: RunManager) -> InitResult:
 
 
 def list_sources(root: Path) -> list[SourceFile]:
-    """Files a run can target: JavaScript and TypeScript sources, without tests, configs, or type declarations."""
+    """Files a run can target: JavaScript and TypeScript sources, without tests, configs, or type declarations.
+
+    Each one passes the path checks of `source_detail`: it is readable (not hidden, not too large) and
+    belongs to this project rather than a nested one with its own package.json.
+    """
     found = []
-    for path in walk_files(root):
-        relative = path.relative_to(root)
-        if (
-            path.suffix not in SOURCE_EXTENSIONS
-            or is_test_file(path)
-            or ".oracle." in path.name
-            or _CONFIG_NAME.search(path.name)
-            or any(part in TEST_DIRS for part in relative.parts[:-1])
-            or path.is_symlink()
-            or not path.is_file()
-        ):
+    for directory, dirnames, filenames in os.walk(root):
+        here = Path(directory)
+        if here != root and "package.json" in filenames and (here / "package.json").is_file():
+            dirnames.clear()  # a nested project: none of its files are this project's sources
             continue
-        try:
-            found.append(SourceFile(path=relative.as_posix(), size=path.stat().st_size))
-        except FileNotFoundError:
-            continue
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and d not in TEST_DIRS and not d.startswith(".")]
+        for name in filenames:
+            path = here / name
+            if (
+                name.startswith(".")
+                or path.suffix not in SOURCE_EXTENSIONS
+                or is_test_file(path)
+                or ".oracle." in name
+                or _CONFIG_NAME.search(name)
+            ):
+                continue
+            try:
+                info = path.lstat()  # lstat, so a symlink is never taken for the file it points to
+            except FileNotFoundError:
+                continue
+            if stat.S_ISREG(info.st_mode) and info.st_size <= MAX_FILE_BYTES:
+                found.append(SourceFile(path=path.relative_to(root).as_posix(), size=info.st_size))
     return sorted(found, key=lambda f: f.path)
 
 

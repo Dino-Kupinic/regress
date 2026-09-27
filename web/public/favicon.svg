@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <style>
+    .tile { fill: #000; }
+    .mark { fill: #fff; stroke: #fff; }
+    @media (prefers-color-scheme: dark) {
+      .tile { fill: #fff; }
+      .mark { fill: #000; stroke: #000; }
+    }
+  </style>
+  <rect class="tile" width="32" height="32" rx="7" />
+  <!-- The logo mark: a 3×3 grid of killed mutants with one survivor. -->
+  <g class="mark" transform="translate(7 7) scale(0.1875)" stroke-width="0">
+    <rect x="0" y="0" width="26" height="26" rx="3" />
+    <rect x="35" y="0" width="26" height="26" rx="3" />
+    <rect x="70" y="0" width="26" height="26" rx="3" />
+    <rect x="0" y="35" width="26" height="26" rx="3" />
+    <rect x="35" y="35" width="26" height="26" rx="3" />
+    <rect x="70" y="35" width="26" height="26" rx="3" />
+    <rect x="0" y="70" width="26" height="26" rx="3" />
+    <rect x="35" y="70" width="26" height="26" rx="3" />
+    <rect x="72.5" y="72.5" width="21" height="21" rx="1.5" fill="none" stroke-width="7" />
+  </g>
+</svg>

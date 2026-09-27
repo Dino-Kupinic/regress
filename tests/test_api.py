@@ -15,6 +15,7 @@ from conftest import ScriptedFactory, failing_llm, slow_llm
 from fastapi.testclient import TestClient
 
 from regress.api import create_app
+from regress.api.project import MAX_FILE_BYTES
 from regress.models import Mutant, MutantStatus, MutationRun, RunReport, Stage
 
 SOURCE = "export const add = (a: number, b: number) => a + b;\nexport const neg = (a: number) => -a;\n"
@@ -106,6 +107,30 @@ def test_sources_leave_out_tests_configs_and_dependencies(client, project):
         "lines": 2,
     }
     assert client.get("/api/project/sources/src/math.test.ts").status_code == 400
+
+
+def test_sources_are_only_files_a_run_can_target(client, project):
+    files = {
+        ".prettierrc.cjs": "module.exports = {};\n",  # hidden, so it can't be read
+        "benchmarks/package.json": "{}",  # a nested project owns everything below it
+        "benchmarks/add.bench.ts": "export {};\n",
+        "benchmarks/deep/sub.ts": "export {};\n",
+        "packages/ui/package.json": "{}",
+        "packages/ui/src/button.ts": "export {};\n",
+        "packages/shared.ts": "export {};\n",  # outside the nested project, so still ours
+        "src/big.ts": "x" * (MAX_FILE_BYTES + 1),
+    }
+    for name, content in files.items():
+        (project / name).parent.mkdir(parents=True, exist_ok=True)
+        (project / name).write_text(content)
+
+    paths = [s["path"] for s in client.get("/api/project/sources").json()]
+    assert paths == ["packages/shared.ts", "src/math.ts"]
+    for path in paths:
+        assert client.get(f"/api/project/sources/{path}").status_code == 200, path
+    for path in (".prettierrc.cjs", "benchmarks/add.bench.ts", "benchmarks/deep/sub.ts", "packages/ui/src/button.ts"):
+        assert client.get(f"/api/project/sources/{path}").status_code in (400, 403), path
+    assert client.get("/api/project/sources/src/big.ts").status_code == 413
 
 
 def test_new_test_file_location_is_reported(client, project):

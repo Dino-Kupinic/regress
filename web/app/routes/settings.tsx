@@ -1,11 +1,21 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CircleAlert } from "lucide-react";
 import { useEffect, useState } from "react";
-import { useLoaderData } from "react-router";
+import { type MetaFunction, useBlocker, useLoaderData } from "react-router";
 import { toast } from "sonner";
 import { Page, PageHeader, SectionHeader } from "~/components/page";
 import { StatusDot } from "~/components/status-dot";
 import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "~/components/ui/alert-dialog";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import {
@@ -24,6 +34,7 @@ import {
   FieldLabel,
 } from "~/components/ui/field";
 import { Input } from "~/components/ui/input";
+import { Kbd, KbdGroup } from "~/components/ui/kbd";
 import { RadioGroup, RadioGroupItem } from "~/components/ui/radio-group";
 import {
   Select,
@@ -38,7 +49,9 @@ import { Skeleton } from "~/components/ui/skeleton";
 import { Spinner } from "~/components/ui/spinner";
 import { Switch } from "~/components/ui/switch";
 import { api, type Settings } from "~/lib/api";
-import { cn } from "~/lib/utils";
+import { cn, pageTitle } from "~/lib/utils";
+
+export const meta: MetaFunction = () => [{ title: pageTitle("Settings") }];
 
 export async function clientLoader() {
   const [settings, project] = await Promise.all([
@@ -107,6 +120,11 @@ const numberFields: {
   },
 ];
 
+const mod =
+  typeof navigator !== "undefined" && /Mac|iP/.test(navigator.platform)
+    ? "⌘"
+    : "Ctrl";
+
 const layers = [
   "Built-in defaults",
   "Personal config",
@@ -137,6 +155,10 @@ export default function SettingsPage() {
   const changed = Object.entries(draft).filter(
     ([key, value]) => value !== settings.effective[key as keyof Settings],
   );
+  const invalid = numberFields.filter(
+    ({ key, min, max }) =>
+      !Number.isInteger(draft[key]) || draft[key] < min || draft[key] > max,
+  );
   const save = useMutation({
     mutationFn: () =>
       api.saveSettings(Object.fromEntries(changed) as Partial<Settings>),
@@ -147,6 +169,25 @@ export default function SettingsPage() {
   });
   const update = <K extends keyof Settings>(key: K, value: Settings[K]) =>
     setDraft((old) => ({ ...old, [key]: value }));
+  const canSave = changed.length > 0 && !invalid.length && !save.isPending;
+  // Ask before leaving with unsaved changes, in the app and on reload.
+  const blocker = useBlocker(changed.length > 0 && !save.isPending);
+  useEffect(() => {
+    if (!changed.length) return;
+    const onBeforeUnload = (event: BeforeUnloadEvent) => event.preventDefault();
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [changed.length]);
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key === "s") {
+        event.preventDefault();
+        if (canSave) save.mutate();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  });
   const modelList = models.data?.models ?? [
     { id: draft.model, created_date: "", newest: false, default: true },
   ];
@@ -269,13 +310,17 @@ export default function SettingsPage() {
             />
             <FieldGroup className="grid gap-x-4 gap-y-6 sm:grid-cols-2 xl:grid-cols-3">
               {numberFields.map(({ key, label, min, max, help }) => (
-                <Field key={key}>
+                <Field
+                  key={key}
+                  data-invalid={invalid.some((item) => item.key === key)}
+                >
                   <FieldLabel htmlFor={`setting-${key}`}>{label}</FieldLabel>
                   <Input
                     id={`setting-${key}`}
                     type="number"
                     min={min}
                     max={max}
+                    aria-invalid={invalid.some((item) => item.key === key)}
                     value={draft[key]}
                     onChange={(event) =>
                       update(key, Number(event.target.value))
@@ -324,9 +369,13 @@ export default function SettingsPage() {
                   : "All changes saved"}
               </CardTitle>
               <CardDescription>
-                {changed.length
-                  ? changed.map(([key]) => key.replaceAll("_", " ")).join(" · ")
-                  : "Your personal defaults are up to date."}
+                {invalid.length
+                  ? `Fix ${invalid.map((item) => item.label.toLowerCase()).join(", ")} before saving.`
+                  : changed.length
+                    ? changed
+                        .map(([key]) => key.replaceAll("_", " "))
+                        .join(" · ")
+                    : "Your personal defaults are up to date."}
               </CardDescription>
             </CardHeader>
             {save.isError && (
@@ -346,12 +395,17 @@ export default function SettingsPage() {
               >
                 Discard
               </Button>
-              <Button
-                disabled={!changed.length || save.isPending}
-                onClick={() => save.mutate()}
-              >
+              <Button disabled={!canSave} onClick={() => save.mutate()}>
                 {save.isPending && <Spinner data-icon="inline-start" />}
                 Save changes
+                <KbdGroup className="hidden sm:inline-flex">
+                  <Kbd className="bg-primary-foreground/15 text-primary-foreground/80">
+                    {mod}
+                  </Kbd>
+                  <Kbd className="bg-primary-foreground/15 text-primary-foreground/80">
+                    S
+                  </Kbd>
+                </KbdGroup>
               </Button>
             </CardFooter>
           </Card>
@@ -413,6 +467,30 @@ export default function SettingsPage() {
           </Card>
         </aside>
       </div>
+      <AlertDialog open={blocker.state === "blocked"}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Discard unsaved changes?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {changed.length}{" "}
+              {changed.length === 1 ? "setting has" : "settings have"} not been
+              saved:{" "}
+              {changed.map(([key]) => key.replaceAll("_", " ")).join(", ")}.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => blocker.reset?.()}>
+              Keep editing
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => blocker.proceed?.()}
+            >
+              Discard
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Page>
   );
 }

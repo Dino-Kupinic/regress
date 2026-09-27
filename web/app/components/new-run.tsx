@@ -7,7 +7,8 @@ import {
   useEffect,
   useState,
 } from "react";
-import { useNavigate } from "react-router";
+import { Link, useNavigate } from "react-router";
+import { matchSources, SOURCE_LIMIT } from "~/components/source-picker";
 import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import { Button } from "~/components/ui/button";
 import {
@@ -114,12 +115,33 @@ export function NewRunProvider({
     setRounds(1);
     setOpened(true);
   };
-  const filtered =
-    sources.data?.filter((item) =>
-      item.path.toLowerCase().includes(search.toLowerCase()),
-    ) ?? [];
+  const matches = matchSources(sources.data ?? [], search);
+  // Render a bounded list, keeping the chosen file in it.
+  const chosen = matches.find((item) => item.path === source);
+  const filtered = matches.slice(0, SOURCE_LIMIT);
+  if (chosen && !filtered.includes(chosen)) filtered.unshift(chosen);
+  const hidden = matches.length - filtered.length;
   const hasTests = !!detail.data?.test_file_exists;
-  const command = `regress run ${source || "<source>"}${baseline ? " --baseline" : ""}${!generate ? " --no-generate" : ""} --rounds ${rounds} --yes`;
+  const command = [
+    "regress run",
+    source || "<source>",
+    model !== DEFAULT_MODEL && `--model ${model}`,
+    baseline && hasTests && "--baseline",
+    !generate && hasTests && "--no-generate",
+    `--rounds ${rounds}`,
+    "--yes",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const blocked = project?.active_run
+    ? "Another run is in progress"
+    : project && !project.ready
+      ? "Finish project setup first"
+      : !source
+        ? "Choose a source file"
+        : detail.isError
+          ? "This file can't be run"
+          : null;
   return (
     <Context.Provider value={{ open, opened }}>
       {children}
@@ -136,7 +158,9 @@ export function NewRunProvider({
               <div className="flex items-baseline justify-between">
                 <h3 className="font-medium">Source file</h3>
                 <span className="text-caption text-muted-foreground tabular-nums">
-                  {sources.data?.length ?? 0} files
+                  {search
+                    ? `${matches.length} of ${sources.data?.length ?? 0}`
+                    : `${sources.data?.length ?? 0} files`}
                 </span>
               </div>
               <InputGroup>
@@ -191,7 +215,18 @@ export function NewRunProvider({
                     No matching source files.
                   </p>
                 )}
+                {hidden > 0 && (
+                  <p className="border-t px-4 py-2.5 text-caption text-muted-foreground">
+                    {hidden} more {hidden === 1 ? "match" : "matches"}. Keep
+                    typing to narrow the list.
+                  </p>
+                )}
               </div>
+              {detail.isError && (
+                <p className="text-caption text-destructive">
+                  {detail.error.message}
+                </p>
+              )}
               {detail.data && (
                 <p className="text-caption text-muted-foreground motion-safe:animate-in fade-in-0">
                   <span className="font-mono text-foreground">
@@ -335,20 +370,27 @@ export function NewRunProvider({
             )}
             <div className="flex items-center justify-between gap-3">
               <span className="text-caption text-muted-foreground">
-                One run at a time
+                {project?.active_run ? (
+                  <>
+                    Another run is in progress.{" "}
+                    <Link
+                      to={`/runs/${encodeURIComponent(project.active_run)}`}
+                      className="text-foreground underline underline-offset-4"
+                      onClick={() => setOpened(false)}
+                    >
+                      Open it
+                    </Link>
+                  </>
+                ) : (
+                  (blocked ?? "One run at a time")
+                )}
               </span>
               <div className="flex gap-2">
                 <Button variant="ghost" onClick={() => setOpened(false)}>
                   Cancel
                 </Button>
                 <Button
-                  disabled={
-                    !source ||
-                    !detail.data ||
-                    !project?.ready ||
-                    run.isPending ||
-                    !!project.active_run
-                  }
+                  disabled={!!blocked || !detail.data || run.isPending}
                   onClick={() =>
                     run.mutate({
                       source,

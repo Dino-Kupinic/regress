@@ -1,7 +1,15 @@
 import { useQuery } from "@tanstack/react-query";
+import { Copy, Ellipsis, FileText, RotateCw, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
-import { Link, useLoaderData, useNavigate } from "react-router";
+import {
+  Link,
+  type MetaFunction,
+  useLoaderData,
+  useNavigate,
+  useSearchParams,
+} from "react-router";
 import { Bar, BarChart, CartesianGrid, Cell, XAxis, YAxis } from "recharts";
+import { DeleteRunDialog } from "~/components/delete-run";
 import { useNewRun } from "~/components/new-run";
 import { Page, PageHeader } from "~/components/page";
 import { RunStatusBadge } from "~/components/run-status";
@@ -19,6 +27,14 @@ import {
   ChartTooltip,
   ChartTooltipContent,
 } from "~/components/ui/chart";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "~/components/ui/dropdown-menu";
 import {
   Empty,
   EmptyContent,
@@ -44,19 +60,20 @@ import {
 } from "~/components/ui/table";
 import { ToggleGroup, ToggleGroupItem } from "~/components/ui/toggle-group";
 import { api, type RunSummary } from "~/lib/api";
+import { copyToClipboard } from "~/lib/clipboard";
 import {
   dateTime,
   duration,
   fileName,
+  pageTitle,
   percent,
   signedPoints,
 } from "~/lib/utils";
 
+export const meta: MetaFunction = () => [{ title: pageTitle("Runs") }];
+
 export async function clientLoader() {
-  return Promise.all([api.runs(), api.sources()]).then(([runs, sources]) => ({
-    runs,
-    sources,
-  }));
+  return { runs: await api.runs() };
 }
 
 const statuses = [
@@ -78,8 +95,27 @@ export default function Runs() {
     initialData: initial.runs,
     refetchInterval: 5_000,
   }).data;
-  const [status, setStatus] = useState<StatusFilter>("all");
-  const [source, setSource] = useState("all");
+  // Filters live in the URL so they survive a reload and the back button.
+  const [params, setParams] = useSearchParams();
+  const status = statuses.includes(params.get("status") as StatusFilter)
+    ? (params.get("status") as StatusFilter)
+    : "all";
+  const source = params.get("source") ?? "all";
+  const setFilter = (key: "status" | "source", value: string) =>
+    setParams(
+      (previous) => {
+        const next = new URLSearchParams(previous);
+        if (value === "all") next.delete(key);
+        else next.set(key, value);
+        return next;
+      },
+      { replace: true },
+    );
+  const [deleting, setDeleting] = useState<RunSummary | null>(null);
+  const files = useMemo(
+    () => [...new Set(runs.map((run) => run.source_file))].sort(),
+    [runs],
+  );
   const filtered = useMemo(
     () =>
       runs.filter(
@@ -106,20 +142,19 @@ export default function Runs() {
         title="Runs"
         description={`${today.length} today · ${runs.filter((run) => run.active).length} running · stored in .regress/runs`}
         actions={
-          <Select value={source} onValueChange={setSource}>
+          <Select
+            value={source}
+            onValueChange={(value) => setFilter("source", value)}
+          >
             <SelectTrigger aria-label="Filter by source file" className="w-56">
               <SelectValue />
             </SelectTrigger>
             <SelectContent align="end">
               <SelectGroup>
                 <SelectItem value="all">All files</SelectItem>
-                {initial.sources.map((item) => (
-                  <SelectItem
-                    key={item.path}
-                    value={item.path}
-                    className="font-mono"
-                  >
-                    {item.path}
+                {files.map((path) => (
+                  <SelectItem key={path} value={path} className="font-mono">
+                    {path}
                   </SelectItem>
                 ))}
               </SelectGroup>
@@ -134,7 +169,7 @@ export default function Runs() {
           variant="outline"
           size="sm"
           value={status}
-          onValueChange={(value) => value && setStatus(value as StatusFilter)}
+          onValueChange={(value) => value && setFilter("status", value)}
           className="flex-wrap"
         >
           {statuses.map((item) => (
@@ -160,6 +195,9 @@ export default function Runs() {
                   <TableHead className="text-right">Change</TableHead>
                   <TableHead className="text-right">Duration</TableHead>
                   <TableHead>Started</TableHead>
+                  <TableHead className="w-12">
+                    <span className="sr-only">Actions</span>
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -207,6 +245,16 @@ export default function Runs() {
                     <TableCell className="text-muted-foreground">
                       {dateTime(run.created_at)}
                     </TableCell>
+                    <TableCell
+                      className="text-right"
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      <RunActions
+                        run={run}
+                        onRunAgain={() => open(run.source_file)}
+                        onDelete={() => setDeleting(run)}
+                      />
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -226,7 +274,74 @@ export default function Runs() {
           )}
         </Card>
       </section>
+      <DeleteRunDialog
+        run={deleting}
+        onOpenChange={(value) => {
+          if (!value) setDeleting(null);
+        }}
+      />
     </Page>
+  );
+}
+
+function RunActions({
+  run,
+  onRunAgain,
+  onDelete,
+}: {
+  run: RunSummary;
+  onRunAgain: () => void;
+  onDelete: () => void;
+}) {
+  const to = `/runs/${encodeURIComponent(run.id)}`;
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label={`Actions for run ${run.id}`}
+        >
+          <Ellipsis />
+        </Button>
+      </DropdownMenuTrigger>
+      {/* Menu clicks bubble through the portal; keep them off the row. */}
+      <DropdownMenuContent
+        align="end"
+        className="min-w-44"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <DropdownMenuGroup>
+          <DropdownMenuItem asChild>
+            <Link to={to}>
+              <FileText />
+              Open report
+            </Link>
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={onRunAgain}>
+            <RotateCw />
+            Run again
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            onSelect={() => copyToClipboard(run.id, "Run ID copied")}
+          >
+            <Copy />
+            Copy run ID
+          </DropdownMenuItem>
+        </DropdownMenuGroup>
+        <DropdownMenuSeparator />
+        <DropdownMenuGroup>
+          <DropdownMenuItem
+            variant="destructive"
+            disabled={run.active}
+            onSelect={onDelete}
+          >
+            <Trash2 />
+            Delete run
+          </DropdownMenuItem>
+        </DropdownMenuGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
