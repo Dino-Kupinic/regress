@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CircleAlert } from "lucide-react";
 import { useState } from "react";
-import { useLoaderData } from "react-router";
+import { type MetaFunction, useLoaderData } from "react-router";
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
 import { Page, PageHeader } from "~/components/page";
 import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
@@ -44,7 +44,9 @@ import {
   TableRow,
 } from "~/components/ui/table";
 import { api, type EvalResult } from "~/lib/api";
-import { dateTime, percent } from "~/lib/utils";
+import { dateTime, pageTitle, percent } from "~/lib/utils";
+
+export const meta: MetaFunction = () => [{ title: pageTitle("Evaluation") }];
 
 export async function clientLoader() {
   const [evaluations, suites, job] = await Promise.all([

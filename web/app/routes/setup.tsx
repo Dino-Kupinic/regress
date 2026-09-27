@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, CircleAlert, Copy, X } from "lucide-react";
 import type { ReactNode } from "react";
-import { useLoaderData } from "react-router";
+import { type MetaFunction, useLoaderData } from "react-router";
 import { toast } from "sonner";
 import { Page, PageHeader } from "~/components/page";
 import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
@@ -25,7 +25,9 @@ import {
 import { Spinner } from "~/components/ui/spinner";
 import { api } from "~/lib/api";
 import { copyToClipboard } from "~/lib/clipboard";
-import { cn } from "~/lib/utils";
+import { cn, pageTitle } from "~/lib/utils";
+
+export const meta: MetaFunction = () => [{ title: pageTitle("Project setup") }];
 
 export async function clientLoader() {
   const [project, sources] = await Promise.all([api.project(), api.sources()]);

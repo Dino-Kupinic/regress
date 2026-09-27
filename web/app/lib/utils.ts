@@ -29,3 +29,8 @@ export function signedPoints(value: number | null | undefined) {
   const rounded = Math.round(value);
   return `${rounded >= 0 ? "+" : ""}${rounded} pts`;
 }
+
+/** The browser tab title for a page, e.g. "Runs · Regress". */
+export function pageTitle(...parts: string[]) {
+  return [...parts, "Regress"].join(" · ");
+}

@@ -6,7 +6,7 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import { type ReactNode, useMemo, useState } from "react";
-import { Link, useLoaderData } from "react-router";
+import { Link, type MetaFunction, useLoaderData } from "react-router";
 import {
   Area,
   AreaChart,
@@ -89,7 +89,16 @@ import {
   type RunSummary,
   type SourceFile,
 } from "~/lib/api";
-import { cn, dateTime, fileName, percent, signedPoints } from "~/lib/utils";
+import {
+  cn,
+  dateTime,
+  fileName,
+  pageTitle,
+  percent,
+  signedPoints,
+} from "~/lib/utils";
+
+export const meta: MetaFunction = () => [{ title: pageTitle("Dashboard") }];
 
 export async function clientLoader() {
   // Only project-wide lists here: a real project can have thousands of source

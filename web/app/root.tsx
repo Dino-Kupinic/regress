@@ -4,17 +4,22 @@ import {
   useQuery,
 } from "@tanstack/react-query";
 import { CircleAlert, Unplug } from "lucide-react";
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import {
   isRouteErrorResponse,
   Links,
+  type LinksFunction,
   Meta,
+  type MetaFunction,
   Outlet,
   Scripts,
   ScrollRestoration,
   useLocation,
+  useNavigate,
+  useNavigation,
   useRouteError,
 } from "react-router";
+import { toast } from "sonner";
 import { AppSidebar } from "~/components/app-sidebar";
 import { LogoMark } from "~/components/logo";
 import { NewRunProvider } from "~/components/new-run";
@@ -32,7 +37,8 @@ import {
 import { SidebarInset, SidebarProvider } from "~/components/ui/sidebar";
 import { Toaster } from "~/components/ui/sonner";
 import { TooltipProvider } from "~/components/ui/tooltip";
-import { ApiError, api } from "~/lib/api";
+import { ApiError, api, type RunSummary } from "~/lib/api";
+import { cn, fileName, percent, signedPoints } from "~/lib/utils";
 import "./styles.css";
 
 const queryClient = new QueryClient({
@@ -47,13 +53,18 @@ const queryClient = new QueryClient({
   },
 });
 
+export const meta: MetaFunction = () => [{ title: "Regress" }];
+
+export const links: LinksFunction = () => [
+  { rel: "icon", href: "/favicon.svg", type: "image/svg+xml" },
+];
+
 export function Layout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>Regress</title>
         <Meta />
         <Links />
       </head>
@@ -107,6 +118,7 @@ function AppShell() {
   });
   const settings = useQuery({ queryKey: ["settings"], queryFn: api.settings });
   const active = runs.data?.find((run) => run.active);
+  useRunFinishedToast(runs.data);
   const apiState: ApiState = project.isError
     ? "offline"
     : project.isSuccess
@@ -114,6 +126,7 @@ function AppShell() {
       : "connecting";
   return (
     <NewRunProvider project={project.data}>
+      <NavigationProgress />
       <SidebarProvider defaultOpen={sidebarOpen}>
         <AppSidebar
           project={project.data}
@@ -152,6 +165,63 @@ function AppShell() {
       </SidebarProvider>
     </NewRunProvider>
   );
+}
+
+/** A thin bar at the top while a page's data loads; hidden for quick loads. */
+function NavigationProgress() {
+  const busy = useNavigation().state !== "idle";
+  return (
+    <div
+      aria-hidden="true"
+      className={cn(
+        "pointer-events-none fixed inset-x-0 top-0 z-50 h-0.5 overflow-hidden opacity-0 transition-opacity duration-200",
+        busy && "opacity-100 delay-150",
+      )}
+    >
+      {busy && (
+        <span className="absolute inset-y-0 left-0 w-2/5 bg-primary motion-safe:animate-indeterminate" />
+      )}
+    </div>
+  );
+}
+
+/** Tell the user when the active run ends, wherever they are in the app. */
+function useRunFinishedToast(runs: RunSummary[] | undefined) {
+  const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const activeId = runs?.find((run) => run.active)?.id;
+  const previous = useRef(activeId);
+  useEffect(() => {
+    const was = previous.current;
+    previous.current = activeId;
+    if (!was || was === activeId) return;
+    const run = runs?.find((item) => item.id === was);
+    if (!run || run.active) return;
+    const to = `/runs/${encodeURIComponent(run.id)}`;
+    const options = {
+      action:
+        pathname === to
+          ? undefined
+          : { label: "Open report", onClick: () => navigate(to) },
+    };
+    const file = fileName(run.source_file);
+    if (run.status === "completed") {
+      toast.success(`Run finished · ${file}`, {
+        ...options,
+        description:
+          run.kept_score == null
+            ? undefined
+            : `Kept score ${percent(run.kept_score)}${run.improvement == null ? "" : ` (${signedPoints(run.improvement)})`}`,
+      });
+    } else if (run.status === "failed") {
+      toast.error(`Run failed · ${file}`, {
+        ...options,
+        description: run.error?.split("\n")[0],
+      });
+    } else {
+      toast(`Run cancelled · ${file}`, options);
+    }
+  }, [activeId, runs, pathname, navigate]);
 }
 
 export function ErrorBoundary() {

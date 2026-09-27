@@ -1,6 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
-import { Link, useLoaderData, useNavigate } from "react-router";
+import {
+  Link,
+  type MetaFunction,
+  useLoaderData,
+  useNavigate,
+} from "react-router";
 import { Bar, BarChart, CartesianGrid, Cell, XAxis, YAxis } from "recharts";
 import { useNewRun } from "~/components/new-run";
 import { Page, PageHeader } from "~/components/page";
@@ -48,9 +53,12 @@ import {
   dateTime,
   duration,
   fileName,
+  pageTitle,
   percent,
   signedPoints,
 } from "~/lib/utils";
+
+export const meta: MetaFunction = () => [{ title: pageTitle("Runs") }];
 
 export async function clientLoader() {
   return Promise.all([api.runs(), api.sources()]).then(([runs, sources]) => ({

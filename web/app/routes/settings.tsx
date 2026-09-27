@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CircleAlert } from "lucide-react";
 import { useEffect, useState } from "react";
-import { useLoaderData } from "react-router";
+import { type MetaFunction, useLoaderData } from "react-router";
 import { toast } from "sonner";
 import { Page, PageHeader, SectionHeader } from "~/components/page";
 import { StatusDot } from "~/components/status-dot";
@@ -38,7 +38,9 @@ import { Skeleton } from "~/components/ui/skeleton";
 import { Spinner } from "~/components/ui/spinner";
 import { Switch } from "~/components/ui/switch";
 import { api, type Settings } from "~/lib/api";
-import { cn } from "~/lib/utils";
+import { cn, pageTitle } from "~/lib/utils";
+
+export const meta: MetaFunction = () => [{ title: pageTitle("Settings") }];
 
 export async function clientLoader() {
   const [settings, project] = await Promise.all([

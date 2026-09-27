@@ -1,7 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, CircleAlert } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import { useLoaderData, useParams, useSearchParams } from "react-router";
+import {
+  type MetaFunction,
+  useLoaderData,
+  useParams,
+  useSearchParams,
+} from "react-router";
 import {
   Bar,
   BarChart,
@@ -85,6 +90,7 @@ import {
   dateTime,
   duration,
   fileName,
+  pageTitle,
   percent,
   signedPoints,
 } from "~/lib/utils";
@@ -95,6 +101,14 @@ export async function clientLoader({ params }: { params: { runId?: string } }) {
     ([run, events]) => ({ run, events }),
   );
 }
+
+export const meta: MetaFunction<typeof clientLoader> = ({ loaderData }) => [
+  {
+    title: loaderData
+      ? pageTitle(fileName(loaderData.run.summary.source_file), "Runs")
+      : pageTitle("Run"),
+  },
+];
 
 type Tab = "overview" | "mutants" | "tests" | "model";
 const TARGET = 80;
@@ -136,6 +150,15 @@ export default function RunPage() {
   );
   const current = kept?.mutation ?? measured.at(-1)?.mutation;
   const isLive = run.summary.active;
+  const wasLive = useRef(isLive);
+  useEffect(() => {
+    // Refresh the sidebar and run lists as soon as this run ends.
+    if (wasLive.current && !isLive) {
+      queryClient.invalidateQueries({ queryKey: ["runs"] });
+      queryClient.invalidateQueries({ queryKey: ["project"] });
+    }
+    wasLive.current = isLive;
+  }, [isLive, queryClient]);
   const statusText = isLive
     ? "Running"
     : run.summary.status[0].toUpperCase() + run.summary.status.slice(1);
