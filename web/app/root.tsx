@@ -32,12 +32,18 @@ import {
 import { SidebarInset, SidebarProvider } from "~/components/ui/sidebar";
 import { Toaster } from "~/components/ui/sonner";
 import { TooltipProvider } from "~/components/ui/tooltip";
-import { api } from "~/lib/api";
+import { ApiError, api } from "~/lib/api";
 import "./styles.css";
 
 const queryClient = new QueryClient({
   defaultOptions: {
-    queries: { retry: 1, refetchOnWindowFocus: true, staleTime: 5_000 },
+    queries: {
+      // A 4xx answer won't change on a retry; only retry network and server errors.
+      retry: (failures, error) =>
+        failures < 1 && !(error instanceof ApiError && error.status < 500),
+      refetchOnWindowFocus: true,
+      staleTime: 5_000,
+    },
   },
 });
 

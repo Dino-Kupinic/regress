@@ -1,5 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
-import { FlaskConical, SquareTerminal, TriangleAlert } from "lucide-react";
+import {
+  FlaskConical,
+  Search,
+  SquareTerminal,
+  TriangleAlert,
+} from "lucide-react";
 import { type ReactNode, useMemo, useState } from "react";
 import { Link, useLoaderData } from "react-router";
 import {
@@ -17,6 +22,7 @@ import {
 } from "recharts";
 import { useNewRun } from "~/components/new-run";
 import { Page, PageHeader, SectionHeader } from "~/components/page";
+import { matchSources, SourcePicker } from "~/components/source-picker";
 import {
   Alert,
   AlertAction,
@@ -50,6 +56,11 @@ import {
   EmptyTitle,
 } from "~/components/ui/empty";
 import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupInput,
+} from "~/components/ui/input-group";
+import {
   Item,
   ItemActions,
   ItemContent,
@@ -58,14 +69,6 @@ import {
   ItemTitle,
 } from "~/components/ui/item";
 import { Progress } from "~/components/ui/progress";
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "~/components/ui/select";
 import {
   Table,
   TableBody,
@@ -80,20 +83,24 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "~/components/ui/tooltip";
-import { api, type Mutation, type RunSummary } from "~/lib/api";
+import {
+  api,
+  type Mutation,
+  type RunSummary,
+  type SourceFile,
+} from "~/lib/api";
 import { cn, dateTime, fileName, percent, signedPoints } from "~/lib/utils";
 
 export async function clientLoader() {
+  // Only project-wide lists here: a real project can have thousands of source
+  // files, so per-file details load lazily for what is on screen.
   const [project, sources, runs, settings] = await Promise.all([
     api.project(),
     api.sources(),
     api.runs(),
     api.settings(),
   ]);
-  const details = await Promise.all(
-    sources.map((source) => api.source(source.path).catch(() => null)),
-  );
-  return { project, sources, runs, settings, details };
+  return { project, sources, runs, settings };
 }
 
 const TARGET = 80;
@@ -123,36 +130,27 @@ export default function Dashboard() {
     queryFn: api.settings,
     initialData: initial.settings,
   }).data;
-  const [source, setSource] = useState(sources[0]?.path ?? "");
-  const [filter, setFilter] = useState<"all" | "never" | "low">("all");
-  const latestByFile = useMemo(
-    () =>
-      new Map(
-        sources.map((item) => [
-          item.path,
-          runs.find((run) => run.source_file === item.path),
-        ]),
-      ),
-    [sources, runs],
-  );
-  const latestCompletedByFile = useMemo(
-    () =>
-      new Map(
-        sources.map((item) => [
-          item.path,
-          runs.find(
-            (run) =>
-              run.source_file === item.path &&
-              run.status === "completed" &&
-              run.kept_score != null,
-          ),
-        ]),
-      ),
-    [sources, runs],
-  );
-  const completed = sources
-    .map((item) => latestCompletedByFile.get(item.path))
-    .filter((run): run is RunSummary => !!run);
+  // Runs come newest first, so the first run seen for a file is its latest.
+  const { latestByFile, latestCompletedByFile } = useMemo(() => {
+    const known = new Set(sources.map((item) => item.path));
+    const latest = new Map<string, RunSummary>();
+    const completed = new Map<string, RunSummary>();
+    for (const run of runs) {
+      if (!known.has(run.source_file)) continue;
+      if (!latest.has(run.source_file)) latest.set(run.source_file, run);
+      if (
+        run.status === "completed" &&
+        run.kept_score != null &&
+        !completed.has(run.source_file)
+      )
+        completed.set(run.source_file, run);
+    }
+    return { latestByFile: latest, latestCompletedByFile: completed };
+  }, [sources, runs]);
+  const recent = [...latestByFile.keys()];
+  const [source, setSource] = useState(recent[0] ?? "");
+  const chosenDetail = useSourceDetail(source).data;
+  const completed = [...latestCompletedByFile.values()];
   const average = completed.length
     ? completed.reduce((sum, run) => sum + (run.kept_score ?? 0), 0) /
       completed.length
@@ -166,6 +164,7 @@ export default function Dashboard() {
   const atTarget = completed.filter(
     (run) => (run.kept_score ?? 0) >= TARGET,
   ).length;
+  const unmeasured = sources.length - completed.length;
   const latest = runs.find(
     (run) => run.status === "completed" && run.kept_score != null,
   );
@@ -174,18 +173,6 @@ export default function Dashboard() {
     queryFn: () => api.run(latest?.id ?? ""),
     enabled: !!latest?.id,
   }).data;
-  const detailFor = (path: string) =>
-    initial.details[sources.findIndex((item) => item.path === path)];
-  const chosenDetail = detailFor(source);
-  const withTests = initial.details.filter(
-    (item) => item?.test_file_exists,
-  ).length;
-  const rows = sources.filter((item) => {
-    const run = latestByFile.get(item.path);
-    if (filter === "never") return !run;
-    if (filter === "low") return !run || (run.kept_score ?? 0) < 60;
-    return true;
-  });
   const keptStages = latestDetail?.report.stages.filter(
     (stage) => stage.mutation && !stage.rejected,
   );
@@ -198,7 +185,7 @@ export default function Dashboard() {
         title="Dashboard"
         description={
           <>
-            {sources.length} source files · {withTests} with tests ·{" "}
+            {sources.length} source files · {completed.length} measured ·{" "}
             {project.toolchain
               ? `Vitest ${project.toolchain.vitest} · Stryker ${project.toolchain.stryker} · ${project.toolchain.runner}`
               : "Toolchain needs setup"}
@@ -229,32 +216,18 @@ export default function Dashboard() {
       <div className="flex flex-col gap-2 rounded-3xl border p-2 sm:flex-row sm:items-center sm:rounded-full sm:pl-5">
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <SquareTerminal className="size-4 shrink-0 text-muted-foreground" />
-          <Select value={source} onValueChange={setSource}>
-            <SelectTrigger
-              variant="ghost"
-              aria-label="Source file to run"
-              className="min-w-0 font-mono"
-            >
-              <SelectValue placeholder="Choose a source file" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                {sources.map((item) => (
-                  <SelectItem
-                    key={item.path}
-                    value={item.path}
-                    className="font-mono"
-                  >
-                    {item.path}
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
+          <SourcePicker
+            sources={sources}
+            recent={recent}
+            value={source}
+            onValueChange={setSource}
+          />
           <span className="hidden truncate text-caption text-muted-foreground md:inline">
             {chosenDetail
               ? `${chosenDetail.test_file} will be ${chosenDetail.test_file_exists ? "extended" : "created"}`
-              : "Choose a source file"}
+              : source
+                ? null
+                : `${sources.length} files to choose from`}
           </span>
         </div>
         <div className="flex items-center justify-end gap-2">
@@ -264,6 +237,9 @@ export default function Dashboard() {
           <Button
             onClick={() => open(source)}
             disabled={!source || !project.ready || !!project.active_run}
+            title={
+              project.active_run ? "Another run is in progress" : undefined
+            }
           >
             Run regress
           </Button>
@@ -271,41 +247,27 @@ export default function Dashboard() {
       </div>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
-          label="Project mutation score"
+          label="Average mutation score"
           value={percent(average)}
-          footer={`${completed.length} of ${sources.length} files measured · target ${TARGET}%`}
+          footer={
+            completed.length
+              ? `Across ${completed.length} measured ${completed.length === 1 ? "file" : "files"} · target ${TARGET}%`
+              : `No file measured yet · target ${TARGET}%`
+          }
         >
           <TargetProgress value={average ?? 0} />
         </StatCard>
         <StatCard
           label={`Files at ${TARGET}% or more`}
           value={atTarget}
-          unit={`of ${sources.length}`}
-          footer="Based on latest completed runs"
+          unit={`of ${completed.length} measured`}
+          footer={
+            unmeasured
+              ? `${unmeasured} ${unmeasured === 1 ? "file" : "files"} not measured yet`
+              : "Every source file is measured"
+          }
         >
-          <div className="flex flex-wrap gap-1">
-            {sources.map((item) => {
-              const score = latestCompletedByFile.get(item.path)?.kept_score;
-              return (
-                <Tooltip key={item.path}>
-                  <TooltipTrigger asChild>
-                    <span
-                      className={cn(
-                        "size-4 rounded-[3px] border transition-colors",
-                        (score ?? 0) >= TARGET
-                          ? "border-foreground bg-foreground"
-                          : "bg-muted",
-                      )}
-                    />
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    <span className="font-mono">{fileName(item.path)}</span>{" "}
-                    {percent(score)}
-                  </TooltipContent>
-                </Tooltip>
-              );
-            })}
-          </div>
+          <TargetGrid runs={completed} />
         </StatCard>
         <StatCard
           label="Tests added by Regress"
@@ -387,21 +349,25 @@ export default function Dashboard() {
         <Card>
           <CardHeader>
             <CardTitle>Mutation score by file</CardTitle>
-            <CardDescription>Latest kept tests for each source</CardDescription>
+            <CardDescription>
+              {completed.length > FILE_CHART_LIMIT
+                ? `The ${FILE_CHART_LIMIT} lowest of ${completed.length} measured files`
+                : "Latest kept score of each measured file, lowest first"}
+            </CardDescription>
             <CardAction>
               <Badge variant="outline">Target {TARGET}%</Badge>
             </CardAction>
           </CardHeader>
           <CardContent>
             <ScoreByFile
-              files={sources.map((item) => {
-                const run = latestByFile.get(item.path);
-                return {
-                  file: fileName(item.path),
-                  score: run?.kept_score ?? 0,
-                  label: run?.active ? "Running" : percent(run?.kept_score),
-                };
-              })}
+              files={[...completed]
+                .sort((a, b) => (a.kept_score ?? 0) - (b.kept_score ?? 0))
+                .slice(0, FILE_CHART_LIMIT)
+                .map((run) => ({
+                  file: fileName(run.source_file),
+                  score: run.kept_score ?? 0,
+                  label: percent(run.kept_score),
+                }))}
             />
           </CardContent>
         </Card>
@@ -436,109 +402,234 @@ export default function Dashboard() {
           </Button>
         </ItemActions>
       </Item>
-      <section className="flex flex-col gap-4">
-        <SectionHeader
-          title="Source files"
-          description="Inspect a file's latest run or start a new one."
-          action={
+      <SourceTable sources={sources} latestByFile={latestByFile} onRun={open} />
+    </Page>
+  );
+}
+
+/** A source file's test file and size; cached, since it rarely changes. */
+function useSourceDetail(path: string) {
+  return useQuery({
+    queryKey: ["source", path],
+    queryFn: () => api.source(path),
+    enabled: !!path,
+    staleTime: 60_000,
+  });
+}
+
+const PAGE_SIZE = 20;
+
+type SourceFilter = "all" | "measured" | "never" | "low";
+
+function SourceTable({
+  sources,
+  latestByFile,
+  onRun,
+}: {
+  sources: SourceFile[];
+  latestByFile: Map<string, RunSummary>;
+  onRun: (path: string) => void;
+}) {
+  const [filter, setFilter] = useState<SourceFilter>("all");
+  const [query, setQuery] = useState("");
+  const [shown, setShown] = useState(PAGE_SIZE);
+  // Files with runs first, most recent first; the rest keep the API's order.
+  const ordered = useMemo(() => {
+    const ran = [...latestByFile.keys()];
+    const ranSet = new Set(ran);
+    const byPath = new Map(sources.map((item) => [item.path, item]));
+    return [
+      ...ran.flatMap((path) => byPath.get(path) ?? []),
+      ...sources.filter((item) => !ranSet.has(item.path)),
+    ];
+  }, [sources, latestByFile]);
+  const rows = matchSources(ordered, query).filter((item) => {
+    const run = latestByFile.get(item.path);
+    if (filter === "measured") return run?.kept_score != null;
+    if (filter === "never") return !run;
+    if (filter === "low") return !run || (run.kept_score ?? 0) < 60;
+    return true;
+  });
+  const count = (key: SourceFilter) =>
+    key === "all"
+      ? sources.length
+      : sources.filter((item) => {
+          const run = latestByFile.get(item.path);
+          if (key === "measured") return run?.kept_score != null;
+          if (key === "never") return !run;
+          return !run || (run.kept_score ?? 0) < 60;
+        }).length;
+  const filters: [SourceFilter, string][] = [
+    ["all", "All"],
+    ["measured", "Measured"],
+    ["never", "Never run"],
+    ["low", "Below 60%"],
+  ];
+  return (
+    <section className="flex flex-col gap-4">
+      <SectionHeader
+        title="Source files"
+        description="Inspect a file's latest run or start a new one."
+        action={
+          <div className="flex flex-wrap items-center gap-2">
+            <InputGroup className="w-full sm:w-56">
+              <InputGroupAddon>
+                <Search />
+              </InputGroupAddon>
+              <InputGroupInput
+                aria-label="Search source files"
+                placeholder="Search files"
+                value={query}
+                onChange={(event) => {
+                  setQuery(event.target.value);
+                  setShown(PAGE_SIZE);
+                }}
+              />
+            </InputGroup>
             <ToggleGroup
               type="single"
               variant="outline"
               size="sm"
               value={filter}
-              onValueChange={(value) =>
-                value && setFilter(value as typeof filter)
-              }
+              onValueChange={(value) => {
+                if (!value) return;
+                setFilter(value as SourceFilter);
+                setShown(PAGE_SIZE);
+              }}
+              className="flex-wrap"
             >
-              <ToggleGroupItem value="all">
-                All {sources.length}
-              </ToggleGroupItem>
-              <ToggleGroupItem value="never">Never run</ToggleGroupItem>
-              <ToggleGroupItem value="low">Below 60%</ToggleGroupItem>
+              {filters.map(([key, label]) => (
+                <ToggleGroupItem key={key} value={key}>
+                  {label}
+                  <span className="text-muted-foreground tabular-nums">
+                    {count(key)}
+                  </span>
+                </ToggleGroupItem>
+              ))}
             </ToggleGroup>
-          }
-        />
-        <Card className="py-0">
-          <Table>
-            <TableHeader>
-              <TableRow className="hover:bg-transparent">
-                <TableHead>File</TableHead>
-                <TableHead className="text-right">Lines</TableHead>
-                <TableHead>Test file</TableHead>
-                <TableHead className="text-right">Tests</TableHead>
-                <TableHead className="w-44">Kept score</TableHead>
-                <TableHead>Last run</TableHead>
-                <TableHead />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {rows.map((item) => {
-                const detail = detailFor(item.path);
-                const run = latestByFile.get(item.path);
-                return (
-                  <TableRow key={item.path}>
-                    <TableCell className="font-mono">{item.path}</TableCell>
-                    <TableCell className="text-right text-muted-foreground tabular-nums">
-                      {detail?.lines ?? "—"}
-                    </TableCell>
-                    <TableCell className="font-mono text-muted-foreground">
-                      {detail?.test_file ?? "—"}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {run?.tests_after ?? run?.tests_before ?? "—"}
-                    </TableCell>
-                    <TableCell>
-                      {run?.active ? (
-                        <span className="shimmer text-muted-foreground">
-                          Running
-                        </span>
-                      ) : (
-                        <div className="flex items-center gap-3">
-                          <Progress
-                            value={run?.kept_score ?? 0}
-                            className="w-20"
-                          />
-                          <span className="tabular-nums">
-                            {percent(run?.kept_score)}
-                          </span>
-                        </div>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {run ? dateTime(run.created_at) : "Never"}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      {run ? (
-                        <Button variant="ghost" size="sm" asChild>
-                          <Link to={`/runs/${encodeURIComponent(run.id)}`}>
-                            Open
-                          </Link>
-                        </Button>
-                      ) : (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => open(item.path)}
-                        >
-                          Run
-                        </Button>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
-          {!rows.length && (
-            <Empty className="border-t p-8">
-              <EmptyHeader>
-                <EmptyTitle>No source files match this filter</EmptyTitle>
-              </EmptyHeader>
-            </Empty>
-          )}
-        </Card>
-      </section>
-    </Page>
+          </div>
+        }
+      />
+      <Card className="gap-0 py-0">
+        <Table>
+          <TableHeader>
+            <TableRow className="hover:bg-transparent">
+              <TableHead>File</TableHead>
+              <TableHead className="text-right">Lines</TableHead>
+              <TableHead>Test file</TableHead>
+              <TableHead className="text-right">Tests</TableHead>
+              <TableHead className="w-44">Kept score</TableHead>
+              <TableHead>Last run</TableHead>
+              <TableHead />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.slice(0, shown).map((item) => (
+              <SourceRow
+                key={item.path}
+                path={item.path}
+                run={latestByFile.get(item.path)}
+                onRun={onRun}
+              />
+            ))}
+          </TableBody>
+        </Table>
+        {!rows.length && (
+          <Empty className="border-t p-8">
+            <EmptyHeader>
+              <EmptyTitle>No source files match</EmptyTitle>
+              <EmptyDescription>
+                Change the search or the filter.
+              </EmptyDescription>
+            </EmptyHeader>
+          </Empty>
+        )}
+        {rows.length > PAGE_SIZE && (
+          <CardFooter className="justify-between gap-3 border-t py-3 text-caption text-muted-foreground">
+            <span className="tabular-nums">
+              Showing {Math.min(shown, rows.length)} of {rows.length}
+            </span>
+            {shown < rows.length && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShown((value) => value + PAGE_SIZE * 2)}
+              >
+                Show more
+              </Button>
+            )}
+          </CardFooter>
+        )}
+      </Card>
+    </section>
+  );
+}
+
+function SourceRow({
+  path,
+  run,
+  onRun,
+}: {
+  path: string;
+  run?: RunSummary;
+  onRun: (path: string) => void;
+}) {
+  const { data: detail, error } = useSourceDetail(path);
+  return (
+    <TableRow>
+      <TableCell className="font-mono">{path}</TableCell>
+      <TableCell className="text-right text-muted-foreground tabular-nums">
+        {detail?.lines ?? "—"}
+      </TableCell>
+      <TableCell className="font-mono text-muted-foreground">
+        {error ? (
+          <span className="font-sans text-caption" title={error.message}>
+            Can't be run
+          </span>
+        ) : detail ? (
+          <span className={cn(!detail.test_file_exists && "opacity-60")}>
+            {detail.test_file}
+            {!detail.test_file_exists && (
+              <span className="ml-2 font-sans text-xs">new</span>
+            )}
+          </span>
+        ) : (
+          "—"
+        )}
+      </TableCell>
+      <TableCell className="text-right tabular-nums">
+        {run?.tests_after ?? run?.tests_before ?? "—"}
+      </TableCell>
+      <TableCell>
+        {run?.active ? (
+          <span className="shimmer text-muted-foreground">Running</span>
+        ) : (
+          <div className="flex items-center gap-3">
+            <Progress value={run?.kept_score ?? 0} className="w-20" />
+            <span className="tabular-nums">{percent(run?.kept_score)}</span>
+          </div>
+        )}
+      </TableCell>
+      <TableCell className="text-muted-foreground">
+        {run ? dateTime(run.created_at) : "Never"}
+      </TableCell>
+      <TableCell className="text-right">
+        {run ? (
+          <Button variant="ghost" size="sm" asChild>
+            <Link to={`/runs/${encodeURIComponent(run.id)}`}>Open</Link>
+          </Button>
+        ) : (
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={!!error}
+            onClick={() => onRun(path)}
+          >
+            Run
+          </Button>
+        )}
+      </TableCell>
+    </TableRow>
   );
 }
 
@@ -585,6 +676,49 @@ function TargetProgress({ value }: { value: number }) {
         className="absolute inset-y-0 w-px bg-foreground"
         style={{ left: `${TARGET}%` }}
       />
+    </div>
+  );
+}
+
+const GRID_LIMIT = 60;
+
+/** One square per measured file, filled when it reaches the target. */
+function TargetGrid({ runs }: { runs: RunSummary[] }) {
+  if (!runs.length) {
+    return (
+      <p className="text-caption text-muted-foreground">
+        Complete a run to fill this in.
+      </p>
+    );
+  }
+  const shown = [...runs]
+    .sort((a, b) => (b.kept_score ?? 0) - (a.kept_score ?? 0))
+    .slice(0, GRID_LIMIT);
+  return (
+    <div className="flex flex-wrap gap-1">
+      {shown.map((run) => (
+        <Tooltip key={run.source_file}>
+          <TooltipTrigger asChild>
+            <span
+              className={cn(
+                "size-4 rounded-[3px] border transition-colors",
+                (run.kept_score ?? 0) >= TARGET
+                  ? "border-foreground bg-foreground"
+                  : "bg-muted",
+              )}
+            />
+          </TooltipTrigger>
+          <TooltipContent>
+            <span className="font-mono">{fileName(run.source_file)}</span>{" "}
+            {percent(run.kept_score)}
+          </TooltipContent>
+        </Tooltip>
+      ))}
+      {runs.length > GRID_LIMIT && (
+        <span className="self-center text-caption text-muted-foreground">
+          +{runs.length - GRID_LIMIT}
+        </span>
+      )}
     </div>
   );
 }
@@ -878,6 +1012,8 @@ function OutcomeDonut({
   );
 }
 
+const FILE_CHART_LIMIT = 8;
+
 const fileConfig = {
   score: { label: "Kept score", color: "var(--chart-1)" },
 } satisfies ChartConfig;
@@ -887,6 +1023,15 @@ function ScoreByFile({
 }: {
   files: { file: string; score: number; label: string }[];
 }) {
+  if (!files.length) {
+    return (
+      <Empty className="h-[160px] p-6">
+        <EmptyHeader>
+          <EmptyDescription>No file measured yet.</EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    );
+  }
   return (
     <ChartContainer
       config={fileConfig}
