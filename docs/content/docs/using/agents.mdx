@@ -1,0 +1,44 @@
+---
+title: Coding agents
+description: Install the Regress agent skill so coding agents like Claude Code, Codex or Cursor can run Regress and read its reports.
+---
+
+The repository ships an [agent skill](https://agentskills.io) in [`skills/regress/`](https://github.com/Dino-Kupinic/regress/tree/main/skills/regress). The skill teaches a coding agent how to use Regress:
+
+- how to check and set up a project
+- which file to pass and which flags to use
+- how to run Regress without an interactive terminal
+- how to read `report.json`
+- what to do when a run fails
+
+## Install the skill
+
+With the [`skills` CLI](https://github.com/vercel-labs/skills):
+
+```bash
+npx skills add Dino-Kupinic/regress
+```
+
+Add `-g` to install it for every project, or `-a claude-code` (repeatable) to choose the agents. You can also copy `skills/regress/` into your agent's skills directory yourself, for example `~/.claude/skills/regress/` for Claude Code.
+
+The agent still needs the `regress` command. See [Installation](/docs/getting-started/installation).
+
+## What the skill tells the agent
+
+- Runs call OpenAI on your key, so the agent starts a run only when you ask for one, and asks before running Regress over several files.
+- It checks `git status` before a run and shows you the test file's diff afterwards.
+- It passes `--yes` or `--model` so a run never waits on the model question, and `regress init --yes` so installs don't stop at a prompt. Run with no input and without `--yes`, `regress init` only reports what is missing.
+- It waits out long runs instead of killing them, and interrupts with SIGINT so the test file is restored.
+- It reads the result from `regress report RUN_ID --json`, runs your project's own tests, and points out tests that lock in behaviour that looks wrong.
+
+## Try it
+
+Ask your agent, for example:
+
+```text
+Use regress to improve the tests for src/cart.ts, with a baseline so I can see before and after.
+```
+
+```text
+Which mutants do the tests from the last regress run still miss?
+```
