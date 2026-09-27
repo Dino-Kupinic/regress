@@ -10,6 +10,18 @@ source ─▶ AI generates tests ─▶ validate (Vitest) ─▶ mutation test (
                          compare before / after ◀── AI improves tests from surviving mutants
 ```
 
+## Documentation
+
+The full documentation is a [Fumadocs](https://fumadocs.dev) site in [`docs/`](docs/content/docs): installation, development, using the CLI and web app, configuration, reports, the HTTP API, troubleshooting, and deployment. Run it locally with:
+
+```bash
+cd docs
+bun install --frozen-lockfile
+bun run dev   # http://127.0.0.1:3000
+```
+
+[Deploy the documentation](docs/content/docs/deployment/documentation.mdx) explains how to host it.
+
 ## Requirements
 
 - Python 3.13+ and [uv](https://docs.astral.sh/uv/)
@@ -232,7 +244,7 @@ stream.addEventListener("end", (e) => {
 
 Each run executes in a process of its own. Cancelling sends it SIGINT, like Ctrl-C in `regress run`: the model call, Vitest or Stryker stops at once, the test file is restored, and the run ends as `cancelled`. Stopping the server cancels a run in progress the same way.
 
-The API defaults to local access. For hosting, the bundled [Nginx deployment](docs/coolify.md) provides authentication:
+The API defaults to local access. For hosting, the bundled [Nginx deployment](docs/content/docs/deployment/application.mdx) provides authentication:
 
 - It listens on 127.0.0.1 and answers only requests addressed to a local host name, which stops DNS rebinding.
 - Browsers can call it only from allowed origins: Vite's dev server on `http://localhost:5173` by default, or those given with `--origin`. Requests from other sites that change something get `403`, including simple requests that skip the CORS preflight.
@@ -281,7 +293,7 @@ The oracle check needs no model. It confirms every hidden bug is detectable, and
 
 ## Development
 
-For a hosted demo, see [Coolify deployment](docs/coolify.md).
+For a hosted demo, see [Deploy the application](docs/content/docs/deployment/application.mdx). [Develop Regress](docs/content/docs/getting-started/development.mdx) covers the repository layout and every check.
 
 ```bash
 uv sync

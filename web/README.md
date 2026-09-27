@@ -8,11 +8,11 @@ uv run regress serve examples
 
 # Terminal 2
 cd web
-npm ci
-npm run dev
+bun install --frozen-lockfile
+bun run dev
 ```
 
-Open `http://127.0.0.1:5173`. To check the frontend, run `npm run typecheck`, `npm run check`, and `npm run build` in `web/`.
+Open `http://127.0.0.1:5173`. To check the frontend, run `bun run typecheck`, `bun run check`, and `bun run build` in `web/`.
 
 Routes: dashboard `/`, runs `/runs`, run detail `/runs/:id`, evaluation `/evaluation`, settings `/settings`, and project setup `/setup`.
 

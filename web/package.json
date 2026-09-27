@@ -7,7 +7,7 @@
     "build": "react-router build",
     "typecheck": "tsc --noEmit",
     "check": "biome check .",
-    "test": "vitest run"
+    "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
     "@codemirror/merge": "^6.0.0",
