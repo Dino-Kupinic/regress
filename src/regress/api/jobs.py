@@ -524,6 +524,8 @@ class RunManager:
         self.needs_api_key = llm_factory is None
         self._context = multiprocessing.get_context("spawn")
         self._lock = threading.Lock()
+        self._claim_condition = threading.Condition(self._lock)
+        self._claiming = False
         self._jobs: dict[str, Job] = {}
         self._busy: str | None = None
         self._reservation: object | None = None
@@ -547,8 +549,22 @@ class RunManager:
             self.replacing = False
 
     def _claim_project(self, lock_timeout: float = LOCK_WAIT_SECONDS) -> None:
+        # Waiting for another server releases _lock. Keep one claimant per manager so a
+        # concurrent request cannot open a second descriptor and compete with our own flock.
+        while self._claiming:
+            self._claim_condition.wait()
+        if self._closed:
+            raise RuntimeError("The run manager has already shut down.")
         if self._project_lock is not None:
             return
+        self._claiming = True
+        try:
+            self._acquire_project(lock_timeout)
+        finally:
+            self._claiming = False
+            self._claim_condition.notify_all()
+
+    def _acquire_project(self, lock_timeout: float) -> None:
         path = regress_dir(self.root) / "api.lock"
         descriptor = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
         try:
@@ -837,6 +853,10 @@ class RunManager:
     def _check_idle(self) -> None:
         if self._closed:
             raise HTTPException(503, "Regress is shutting down.")
+        if self.replacing or self._claiming:
+            raise HTTPException(
+                503, "Regress is waiting for the previous server to release the project. Try again shortly."
+            )
         if self._problem is not None:
             raise HTTPException(503, self._problem)
         if self._jobs:

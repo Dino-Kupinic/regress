@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from regress.models import Mutant, MutantStatus, MutationRun
+from regress.stryker import source_span
 
 _STATUS_NOTES = {
     MutantStatus.SURVIVED: "survived: tests ran this code but no assertion failed",
@@ -29,12 +30,22 @@ def mutated_line(mutant: Mutant, source_lines: list[str]) -> tuple[str, str] | N
     None for multi-line mutants, and when the source no longer matches the mutant (it was edited
     after the run that found it).
     """
-    if mutant.start_line != mutant.end_line or "\n" in mutant.replacement or mutant.start_line > len(source_lines):
+    if (
+        mutant.start_line != mutant.end_line
+        or "\n" in mutant.replacement
+        or not 1 <= mutant.start_line <= len(source_lines)
+    ):
         return None
     line = source_lines[mutant.start_line - 1].rstrip("\n")
-    if line[mutant.start_column - 1 : mutant.end_column - 1] != mutant.original:
+    try:
+        # Stryker's columns count UTF-16 code units, which can differ from Python string offsets.
+        original = source_span([line], 1, mutant.start_column, 1, mutant.end_column)
+        prefix = source_span([line], 1, 1, 1, mutant.start_column)
+    except ValueError:
+        return None  # stale or invalid coordinates cannot describe this source line
+    if original != mutant.original:
         return None
-    mutated = line[: mutant.start_column - 1] + mutant.replacement + line[mutant.end_column - 1 :]
+    mutated = prefix + mutant.replacement + line[len(prefix) + len(original) :]
     return line.strip(), mutated.strip()
 
 

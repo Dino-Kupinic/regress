@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from regress.errors import ToolTimeout
 from regress.files import atomic_write_bytes, atomic_write_text
-from regress.models import TestRunResult
+from regress.models import TestRunResult, TestStatus
 from regress.project import Project, import_specifiers, mock_specifiers, refers_to
 from regress.vitest import run_vitest
 
@@ -92,6 +93,7 @@ def check_candidate(
     output_dir: Path,
     name: str,
     timeout: float = 300,
+    previous_result: TestRunResult | None = None,
 ) -> Check:
     problems = static_problems(project, content, previous)
     if problems:
@@ -129,10 +131,28 @@ def check_candidate(
     if missing:
         listing = ", ".join(f'"{name}"' for name in missing[:15])
         problems.append(f"These existing tests were removed or renamed; keep each one exactly: {listing}")
+    passed = Counter(test.full_name for test in result.tests if test.status == TestStatus.PASSED)
+    previously_passed = (
+        Counter(test.full_name for test in previous_result.tests if test.status == TestStatus.PASSED)
+        if previous_result is not None
+        else Counter(required_tests)
+    )
+    previously_skipped = Counter(test.full_name for test in previous_result.skipped) if previous_result else Counter()
+    newly_skipped = Counter(test.full_name for test in result.skipped) - previously_skipped
+    if newly_skipped:
+        listing = ", ".join(f'"{name}"' for name in sorted(newly_skipped)[:15])
+        problems.append(f"These tests were newly skipped or left pending; every new test must run and pass: {listing}")
+    no_longer_passing = sorted((previously_passed - passed).keys() - set(missing))
+    if no_longer_passing:
+        listing = ", ".join(f'"{name}"' for name in no_longer_passing[:15])
+        problems.append(f"These existing passing tests no longer pass; keep every occurrence active: {listing}")
     if not problems and result.total < min_tests:
         problems.append(
             f"No new tests were added: the file has {result.total} tests, the previous version had {min_tests - 1}."
         )
+    min_passed = sum(previously_passed.values()) + 1 if previous_result is not None else min_tests
+    if not problems and sum(passed.values()) < min_passed:
+        problems.append("No new passing tests were added; add at least one test that runs and passes.")
     return Check(ok=not problems, problems=problems, result=result)
 
 

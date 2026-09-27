@@ -89,7 +89,7 @@ The Docker image already includes a `/healthz` check with a 30-second interval, 
 
 Keep one application instance for each writable project. An exclusive filesystem lock prevents a second API server from owning the same project. Runs, evaluations, and dependency installs share a reservation, including cancellation and cleanup. Do not run standalone CLI mutation jobs against the project while the API is serving it.
 
-A replacement container may start while the previous one is still stopping. While it waits up to 30 seconds for the lock, it answers `/healthz` as ready so the platform can stop the old container. If the old process still holds the lock when that wait ends, the new process exits. That ready response does not mean the new process has taken over the project yet. Do not leave two servers running against the same volume.
+A replacement container may start while the previous one is still stopping. While it waits up to 30 seconds for the lock, it answers `/healthz` as ready so the platform can stop the old container. New runs, evaluations, and dependency installs receive `503` until the handoff completes. If the old process still holds the lock when that wait ends, the new process exits. That ready response does not mean the new process has taken over the project yet. Do not leave two servers running against the same volume.
 
 On SIGTERM the entrypoint waits up to 25 seconds, then sends SIGKILL. Uvicorn's graceful-shutdown limit is 15 seconds. During shutdown Python cancels workers so they can restore source and test files, and escalates when a worker does not finish. Tini reaps orphaned child processes. Give the platform at least 30 seconds before it forces the container to stop.
 

@@ -460,6 +460,28 @@ def test_mutants_come_with_the_changed_source_line(client, saved_run):
     assert client.get(f"/api/runs/{saved_run}/stages/3/mutants").status_code == 404  # never mutation-tested
 
 
+def test_saved_mutant_source_uses_javascript_utf16_columns(client, project, saved_run):
+    run_dir = project / ".regress/runs" / saved_run
+    report_path = run_dir / "report.json"
+    report = RunReport.model_validate_json(report_path.read_text())
+    mutation = report.stages[1].mutation
+    assert mutation is not None
+    mutation.mutants = [
+        mutation.mutants[0].model_copy(
+            update={"original": "1", "replacement": "0", "start_column": 28, "end_column": 29}
+        )
+    ]
+    report_path.write_text(report.model_dump_json())
+    source = 'const emoji = "😀"; return 11;\n'
+    (run_dir / "stryker/mutation-2.json").write_text(json.dumps({"files": {"src/math.ts": {"source": source}}}))
+
+    response = client.get(f"/api/runs/{saved_run}/stages/1/mutants")
+    assert response.status_code == 200
+    [mutant] = response.json()["mutants"]
+    assert mutant["original_line"] == source.rstrip("\n")
+    assert mutant["mutated_line"] == 'const emoji = "😀"; return 01;'
+
+
 def test_model_calls_and_artifacts_can_be_read(client, saved_run):
     [call] = client.get(f"/api/runs/{saved_run}/llm").json()
     assert (call["name"], call["kind"], call["attempt"], call["input_tokens"]) == (
