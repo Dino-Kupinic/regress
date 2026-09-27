@@ -122,6 +122,16 @@ regress models --all --refresh  # older text models and dated snapshots, fetched
 
 Regress doesn't ask when `--model`, `--yes`, or `REGRESS_MODEL` is given, or when it isn't running in an interactive terminal (CI, pipes).
 
+### Coding agents
+
+[`skills/regress/`](skills/regress/SKILL.md) is an agent skill. It teaches coding agents such as Claude Code, Codex or Cursor how to set up a project, run Regress without a terminal, read `report.json` and handle failures. Install it with:
+
+```bash
+npx skills add Dino-Kupinic/regress
+```
+
+Or copy the directory into your agent's skills folder, such as `~/.claude/skills/`. See [Coding agents](docs/content/docs/using/agents.mdx).
+
 ## How it works
 
 1. **Validate the project:** `package.json`, installed Vitest/Stryker versions, the target file and its test file.
