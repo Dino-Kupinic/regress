@@ -1,9 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, CircleAlert } from "lucide-react";
+import {
+  Check,
+  CircleAlert,
+  Copy,
+  Ellipsis,
+  SquareTerminal,
+  Trash2,
+} from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import {
   type MetaFunction,
   useLoaderData,
+  useNavigate,
   useParams,
   useSearchParams,
 } from "react-router";
@@ -17,6 +25,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { DeleteRunDialog } from "~/components/delete-run";
 import { useNewRun } from "~/components/new-run";
 import { Page } from "~/components/page";
 import { RunStatusBadge } from "~/components/run-status";
@@ -41,6 +50,14 @@ import {
   ChartTooltip,
   ChartTooltipContent,
 } from "~/components/ui/chart";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "~/components/ui/dropdown-menu";
 import {
   Empty,
   EmptyDescription,
@@ -119,6 +136,8 @@ export default function RunPage() {
   const [params, setParams] = useSearchParams();
   const tab = (params.get("tab") as Tab) || "overview";
   const { open } = useNewRun();
+  const navigate = useNavigate();
+  const [deleting, setDeleting] = useState(false);
   const queryClient = useQueryClient();
   const run = useQuery({
     queryKey: ["run", runId],
@@ -216,6 +235,51 @@ export default function RunPage() {
               >
                 Run again
               </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon" aria-label="More actions">
+                    <Ellipsis />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="min-w-52">
+                  <DropdownMenuGroup>
+                    <DropdownMenuItem
+                      onSelect={() =>
+                        copyToClipboard(run.summary.id, "Run ID copied")
+                      }
+                    >
+                      <Copy />
+                      Copy run ID
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onSelect={() =>
+                        copyToClipboard(
+                          `regress report ${run.summary.id}`,
+                          "Command copied",
+                        )
+                      }
+                    >
+                      <SquareTerminal />
+                      Copy report command
+                    </DropdownMenuItem>
+                  </DropdownMenuGroup>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuGroup>
+                    <DropdownMenuItem
+                      variant="destructive"
+                      onSelect={() => setDeleting(true)}
+                    >
+                      <Trash2 />
+                      Delete run
+                    </DropdownMenuItem>
+                  </DropdownMenuGroup>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <DeleteRunDialog
+                run={deleting ? run.summary : null}
+                onOpenChange={setDeleting}
+                onDeleted={() => navigate("/runs", { replace: true })}
+              />
             </>
           )}
         </div>
