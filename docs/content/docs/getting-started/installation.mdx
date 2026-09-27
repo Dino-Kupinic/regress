@@ -18,7 +18,7 @@ Regress has a Python CLI and API, a React web application, and a JavaScript tool
 
 The target project needs installed `vitest`, `@stryker-mutator/core`, and `@stryker-mutator/vitest-runner` development dependencies. Use Vitest 2–4; the bundled examples use Vitest 4 and Stryker 10. Regress rejects the unsupported Vitest 5/Stryker runner 10 combination because mutants would not activate. [Project setup](/docs/getting-started/project-setup) explains installation for your own repository.
 
-Regress can run project tools through `npx` when Bun is unavailable. The repository's integration tests require Bun.
+Regress can run project tools through `npx` when Bun is unavailable. The repository's integration tests run Vitest and Stryker through Bun and skip when Bun or the installed example dependencies are missing.
 
 ## Get the repository
 

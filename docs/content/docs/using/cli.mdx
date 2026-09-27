@@ -36,7 +36,7 @@ regress run src/cart.ts --rounds 0 --yes
 | `--verbose`, `-v` | Show validation details and model summaries. |
 | `--yes`, `-y` | Skip the model question and use the effective default. |
 
-`--rounds 0` still generates, validates, and mutation-tests a candidate. `--no-generate` requires an existing passing test file with at least one test; it first measures that file and then improves from its undetected mutants.
+`--rounds 0` still generates, validates, and mutation-tests a candidate. `--no-generate` requires an existing passing test file with at least one test; it first measures that file and then improves from its undetected mutants. When more undetected mutants exist than `max_mutants`, one round sends a spread across the file: one mutant per line and operator before duplicates. See [Configuration](/docs/reference/configuration).
 
 Source and explicit test paths are resolved relative to your shell's working directory. The test must be in the source's project and must differ from the source. Supported extensions are `.ts`, `.tsx`, `.mts`, `.cts`, `.js`, `.jsx`, `.mjs`, and `.cjs`.
 
@@ -44,7 +44,9 @@ Existing tests must pass before Regress proceeds. Regress preserves their full t
 
 ### Progress and cancellation
 
-The terminal displays the active phase and elapsed time. Model activity can include reasoning or approximate writing progress. Non-interactive output prints periodic progress lines. A quiet model connection is retried according to the [model timeouts](/docs/reference/configuration).
+The terminal displays the active phase and elapsed time. Model activity can include reasoning or approximate writing progress. After 20 seconds without new data the spinner adds `quiet for …`. Non-interactive output prints a progress line every 30 seconds. Silence longer than `llm_timeout` is retried, up to 3 attempts; see [model timeouts](/docs/reference/configuration).
+
+In the live summary, **Killed** includes mutants that timed out. `report.json` counts timeouts separately. See [Reports and mutation scores](/docs/reference/reports).
 
 Press Ctrl-C to interrupt. The CLI exits with code 130 and restores the original test file. Normal command errors exit with code 1. Reports and intermediate artifacts help diagnose failures.
 
@@ -78,7 +80,7 @@ regress models --set MODEL_ID --no-ask
 regress models --ask
 ```
 
-Replace `MODEL_ID` with an ID available to your API key. The model catalog is fetched from OpenAI, cached for a day, and falls back to the installed SDK's catalog when unavailable. An offline fallback is not confirmation that your key can access a model.
+Replace `MODEL_ID` with an ID available to your API key. The prompt and `regress models` show the 10 newest text models, plus the current default when it is not already listed. `--all` adds older text models and dated snapshots; it does not list non-text models. The catalog is fetched from OpenAI and cached for a day. If a refresh fails and a cache exists, Regress keeps that cache and notes that the API could not be reached. With no cache, it falls back to the text models bundled with the installed `openai` SDK. An SDK fallback is not confirmation that your key can access a model. Any ID the key can use can still be typed at the prompt, including models left off the short list.
 
 `--set` saves the personal default; `--ask` and `--no-ask` control the CLI prompt. The built-in default in this version is `gpt-6-luna`. A project setting or `REGRESS_MODEL` can override the personal default.
 
@@ -95,7 +97,7 @@ The path defaults to `.`. The server listens at `127.0.0.1:8765` by default; int
 
 `--host` changes the bind address. A non-loopback address requires `--allow-remote`; use the authenticated deployment proxy when hosting the application. `--origin URL` is repeatable and replaces the default allowed browser origins (`http://localhost:5173` and `http://127.0.0.1:5173`).
 
-The API serves one project and reserves it exclusively. Do not run a CLI mutation job or evaluation against that project while the API is serving it. Backend process supervision and project locking require Linux or macOS.
+The API serves one project and reserves it exclusively. A second `regress serve` for that project waits up to 30 seconds for the lock and then exits if the first server is still running. While it waits, `/api/ready` reports ready. Do not run a CLI mutation job or evaluation against that project while the API is serving it. Backend process supervision and project locking require Linux or macOS.
 
 ## Evaluate test quality
 

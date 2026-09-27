@@ -32,7 +32,11 @@ bun add -d vitest@^4 @stryker-mutator/core @stryker-mutator/vitest-runner
 vitest 5.x is not supported by @stryker-mutator/vitest-runner 10.x: mutants are never activated …
 ```
 
-With this combination Stryker never activates mutants, so every mutant would falsely survive. Install Vitest 4. `regress init` offers to do it. Vitest older than 2 is rejected for the same reason.
+With this combination Stryker never activates mutants, so every mutant would falsely survive. Install Vitest 4. `regress init` offers to do it. Vitest older than 2 is also rejected, with a different message: it is too old for Stryker. Upgrade that to Vitest 4 as well.
+
+### Dependency install failed
+
+`regress init` runs the project's package manager for at most 10 minutes. The package manager has to be on `PATH`. If you decline the prompt, or the command exits non-zero, install the printed packages yourself and run `regress init` again. The error includes the end of the package manager's output.
 
 ### Bun is not installed
 
@@ -62,7 +66,7 @@ Improving tests directly needs a test file with at least one passing test. Drop 
 
 ### Every proposal is rejected
 
-After `max_repairs` retries a proposal is recorded as a rejected stage. Its `problems` list the reasons, such as a failing test, a removed existing test, a mocked target module, a skipped or focused test, or an edited source file. Check the prompts and responses in `llm/`. Try a stronger model, a higher `reasoning_effort`, or raise `max_repairs`.
+After `max_repairs` retries a proposal is recorded as a rejected stage. `max_repairs` is the number of retries, so the default of 2 is 3 attempts in total. Its `problems` list the reasons, such as a failing test, a removed or renamed existing test, a mocked target module, a new `.only`, `.skip`, `.todo`, `.fails`, `.skipIf`, or `.runIf`, or an edited source file. Skips that were already in the previous file can stay. Check the prompts and responses in `llm/`. Try a stronger model, a higher `reasoning_effort`, or raise `max_repairs`.
 
 ### The model times out or stops
 
@@ -97,7 +101,7 @@ The web app shows this banner when `/api` does not answer. Start the API with `u
 
 ### Another Regress API server already owns the project
 
-Only one API server may serve a project. Stop the other server; a crashed server releases its lock when its process exits.
+Only one API server may own a project. A second `regress serve` waits up to 30 seconds, answering `/api/ready` while it waits, then exits if the lock is still held. Stop the other server. A crashed server releases its lock when its process exits. The log line is `Another Regress API server already owns …`.
 
 ### Requests from an origin are not allowed
 

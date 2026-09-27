@@ -25,7 +25,8 @@ bun run dev   # http://127.0.0.1:3000
 ## Requirements
 
 - Python 3.13+ and [uv](https://docs.astral.sh/uv/)
-- [Bun](https://bun.sh) (runs Vitest and Stryker; falls back to `npx`) and Node.js
+- Node.js 22 and [Bun](https://bun.sh) 1.3.13 (CI and the production image pin these). Bun runs Vitest and Stryker; `runner = "auto"` falls back to `npx` when Bun is not on `PATH`
+- Linux or macOS for `regress serve`. Project locking uses `fcntl`
 - A TypeScript/JavaScript project with **Vitest 2–4**, `@stryker-mutator/core` and `@stryker-mutator/vitest-runner` (`regress init` installs them)
 - An OpenAI API key in `OPENAI_API_KEY` (a `.env` file works too)
 
@@ -83,7 +84,7 @@ Improvement         +47%
 ✓ Kept improved tests in test/cart.test.ts
 ```
 
-This output is from a run with a scripted model. See [Evaluation](#evaluation) for real-model numbers. While Regress waits on the model, Vitest or Stryker, a spinner shows the elapsed time. For the model it also shows what it is doing: `thinking` (with a headline when the model provides a reasoning summary) or `writing ~3,100 tokens`. If OpenAI goes quiet, the spinner says for how long (`quiet for 45s`). In logs or piped output, Regress prints a progress line every 30 seconds. A healthy response sends data every few seconds, so after 2 minutes of silence Regress reports the stall and retries, up to 3 attempts.
+This output is from a run with a scripted model. See [Evaluation](#evaluation) for real-model numbers. While Regress waits on the model, Vitest or Stryker, a spinner shows the elapsed time. For the model it also shows what it is doing: `thinking` (with a headline when the model provides a reasoning summary) or `writing ~3,100 tokens`. After 20 seconds without new data the spinner adds `quiet for …`. In logs or piped output, Regress prints a progress line every 30 seconds. Silence longer than `llm_timeout` (120 seconds by default) is retried, up to 3 attempts. In the terminal summary, **Killed** includes mutants that timed out; `report.json` counts those separately.
 
 Useful flags for `regress run`:
 
@@ -99,7 +100,7 @@ Useful flags for `regress run`:
 
 ### Choosing a model
 
-Before each run, Regress lists the newest models your API key can use and asks which one should write the tests. Press Enter to keep the default, `gpt-6-luna` unless you change it. The list comes from the OpenAI API, is cached for a day, and falls back to the list bundled with the `openai` SDK when the API is unreachable. It only shows text models (no audio, realtime, image or embedding models), but any model your key has can be typed by name.
+Before each run, Regress shows the 10 newest text models your API key can use, plus your default if it is not already in that list, and asks which one should write the tests. Press Enter to keep the default, `gpt-6-luna` unless you change it. Dated snapshots stay hidden until `regress models --all`. The list comes from the OpenAI API and is cached for a day. If a later refresh fails and a cache already exists, Regress keeps that cache and says the API could not be reached. With no cache, it falls back to the text models bundled with the installed `openai` SDK. The short list leaves out non-text models (audio, realtime, image, embedding, and similar), shut-down models, and legacy `gpt-3.5` / `gpt-4` IDs. Any model ID your key can use can still be typed by name.
 
 ```text
 Which model should write the tests? (fetched from the OpenAI API just now)
@@ -116,7 +117,7 @@ If you answer yes, Regress saves the model as your default in `~/.config/regress
 regress models                  # latest models, your default, and whether Regress asks
 regress models --set gpt-6-sol  # change the default
 regress models --ask            # ask before each run again (--no-ask to stop)
-regress models --all --refresh  # every model incl. dated snapshots, fetched fresh
+regress models --all --refresh  # older text models and dated snapshots, fetched fresh
 ```
 
 Regress doesn't ask when `--model`, `--yes`, or `REGRESS_MODEL` is given, or when it isn't running in an interactive terminal (CI, pipes).
@@ -127,7 +128,7 @@ Regress doesn't ask when `--model`, `--yes`, or `REGRESS_MODEL` is given, or whe
 2. **Generate tests:** the model gets the source (with line numbers), the modules it imports locally, and the existing tests, and returns a complete test file as structured output.
 3. **Validate the tests.** A candidate is accepted only if all of these hold:
    - it imports the real module under test and doesn't mock it
-   - it has no `.only`/`.skip`/`.todo`
+   - it has no `.only`, and it does not add `.skip`, `.todo`, `.fails`, `.skipIf`, or `.runIf` beyond what the previous file already had
    - it passes against the original implementation in Vitest, with no errors outside the tests (a failing hook, an unhandled rejection)
    - Vitest finishes within `vitest_timeout` seconds. A test that never ends is stopped and sent back like any other problem
    - every existing test survives with the same name
@@ -136,7 +137,7 @@ Regress doesn't ask when `--model`, `--yes`, or `REGRESS_MODEL` is given, or whe
 
    Rejected candidates go back to the model with the exact errors (up to `max_repairs` times). The implementation is treated as the source of truth, because these are regression tests.
 4. **Mutation testing:** Stryker mutates only the target file and runs only the target test file (`testFiles`), so the score reflects what that test file alone can detect.
-5. **Improve:** undetected mutants (survived or uncovered) are sent back as before/after lines:
+5. **Improve:** undetected mutants (survived or uncovered) are sent back as before/after lines. At most `max_mutants` (default 40) go in one round. When there are more, Regress spreads them across the file, taking one mutant per line and operator before any duplicates:
 
    ```text
    Mutant 3 · EqualityOperator · src/cart.ts:31 (survived: tests ran this code but no assertion failed)
@@ -198,7 +199,7 @@ stryker_timeout = 1800  # seconds for one mutation run
 regress serve examples       # http://127.0.0.1:8765/api, interactive docs at /api/docs
 ```
 
-The OpenAPI schema at `/api/openapi.json` describes every request and response, so the web app can generate its types from it (for example with `openapi-typescript`). Operation IDs are the route names: `start_run`, `get_run`, and so on.
+The OpenAPI schema at `/api/openapi.json` describes every request and response, so the web app can generate its types from it (for example with `openapi-typescript`). Operation IDs are the route names: `start_run`, `get_run`, and so on. Evaluations (`/api/evaluations`) are documented in the [HTTP API reference](docs/content/docs/reference/http-api.mdx); the table below is the run and project surface.
 
 | Method | Path | What it does |
 |---|---|---|
@@ -247,11 +248,11 @@ Each run executes in a process of its own. Cancelling sends it SIGINT, like Ctrl
 The API defaults to local access. For hosting, the bundled [Nginx deployment](docs/content/docs/deployment/application.mdx) provides authentication:
 
 - It listens on 127.0.0.1 and answers only requests addressed to a local host name, which stops DNS rebinding.
-- Browsers can call it only from allowed origins: Vite's dev server on `http://localhost:5173` by default, or those given with `--origin`. Requests from other sites that change something get `403`, including simple requests that skip the CORS preflight.
+- Browsers can call it only from allowed origins: `http://localhost:5173` and `http://127.0.0.1:5173` by default. `--origin` is repeatable and replaces that pair. Requests that change something and come from another origin get `403`, including simple requests that skip the CORS preflight. `GET`, `HEAD`, and `OPTIONS` pass that check, as do clients that send no `Origin` header, such as `curl`.
 - `OPENAI_API_KEY` stays on the server. Only JavaScript and TypeScript files outside hidden and dependency folders can be read, so `.env` is never served.
 - Binding beyond loopback requires `--allow-remote`. Keep the API port private and expose only the authenticated proxy.
 
-API runs, evaluations and dependency installs share one exclusive project reservation. A second API server for the same project fails at startup. Do not run CLI mutation jobs against a project currently served by the API. The backend's process supervision and project locking require Linux or macOS.
+API runs, evaluations and dependency installs share one exclusive project reservation. A second API server does not take the project while the first still holds it. It answers readiness checks during that wait, then exits if the lock is still held after 30 seconds. Do not run CLI mutation jobs against a project currently served by the API. The backend's process supervision and project locking require Linux or macOS.
 
 Requests have a 1 MiB body limit. Unexpected errors return a generic response with an `X-Request-ID` that also appears in server logs. Tool output retained in each log is capped at the most recent 1 MiB. Reports and configuration use atomic file replacement, and cancellation restores the original source and test bytes.
 
@@ -322,7 +323,7 @@ Code map (`src/regress/`):
 | `ui.py` | Terminal output |
 | `store.py` | Run storage |
 | `evaluation.py` | Hidden-bug evaluation |
-| `api/` | HTTP API: app and security (`app.py`), routes, run processes (`jobs.py`), saved runs (`results.py`) |
+| `api/` | HTTP API: app and security (`app.py`), routes, run processes (`jobs.py`), saved runs (`results.py`), evaluations (`evaluations.py`) |
 
 ## Scope and roadmap
 
