@@ -3,7 +3,7 @@ import {
   QueryClientProvider,
   useQuery,
 } from "@tanstack/react-query";
-import { Unplug } from "lucide-react";
+import { CircleAlert, Unplug } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import {
   isRouteErrorResponse,
@@ -21,6 +21,14 @@ import { NewRunProvider } from "~/components/new-run";
 import { type ApiState, SiteHeader } from "~/components/site-header";
 import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import { Button } from "~/components/ui/button";
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "~/components/ui/empty";
 import { SidebarInset, SidebarProvider } from "~/components/ui/sidebar";
 import { Toaster } from "~/components/ui/sonner";
 import { TooltipProvider } from "~/components/ui/tooltip";
@@ -148,10 +156,19 @@ export function ErrorBoundary() {
       ? error.message
       : "Unexpected error";
   return (
-    <div className="error-page">
-      <h1>Could not load this page</h1>
-      <p>{message}</p>
-      <Button onClick={() => window.location.reload()}>Try again</Button>
+    <div className="flex min-h-svh items-center justify-center p-6">
+      <Empty className="max-w-md">
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <CircleAlert />
+          </EmptyMedia>
+          <EmptyTitle>Could not load this page</EmptyTitle>
+          <EmptyDescription>{message}</EmptyDescription>
+        </EmptyHeader>
+        <EmptyContent>
+          <Button onClick={() => window.location.reload()}>Try again</Button>
+        </EmptyContent>
+      </Empty>
     </div>
   );
 }

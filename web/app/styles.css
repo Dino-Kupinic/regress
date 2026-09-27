@@ -5,7 +5,6 @@
 @import "@fontsource/bayon/latin-400.css";
 @import "@fontsource/ibm-plex-mono/latin-400.css";
 @import "@fontsource/ibm-plex-mono/latin-500.css";
-@import "./legacy.css" layer(components);
 
 @custom-variant dark (&:is(.dark *));
 
@@ -18,9 +17,6 @@
   --color-smoke: #8f8f8f;
   --color-graphite: #666;
   --color-obsidian: #000;
-  --color-score-high: #0a7a3e;
-  --color-score-mid: #946200;
-  --color-score-low: #c2261d;
   --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
 
   --text-caption: 0.8125rem;
@@ -182,5 +178,9 @@
   }
   body {
     @apply bg-background text-sm text-foreground;
+  }
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
   }
 }
