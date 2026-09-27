@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, CircleAlert, Copy, X } from "lucide-react";
-import type { ReactNode } from "react";
+import { Check, CircleAlert, Copy, Search, X } from "lucide-react";
+import { type ReactNode, useState } from "react";
 import { type MetaFunction, useLoaderData } from "react-router";
 import { toast } from "sonner";
 import { Page, PageHeader } from "~/components/page";
+import { matchSources, SOURCE_LIMIT } from "~/components/source-picker";
 import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
@@ -61,6 +62,8 @@ export default function Setup() {
       );
     },
   });
+  const [search, setSearch] = useState("");
+  const matches = matchSources(sources, search);
   const missing = project.packages.filter((item) => !item.version);
   const checks: [string, boolean | null][] = [
     ["Project package.json", true],
@@ -227,12 +230,37 @@ export default function Setup() {
               <CardTitle>Files you can test</CardTitle>
               <CardDescription>{sources.length} found</CardDescription>
             </CardHeader>
+            {sources.length > SOURCE_LIMIT && (
+              <div className="border-b p-2">
+                <InputGroup>
+                  <InputGroupAddon>
+                    <Search />
+                  </InputGroupAddon>
+                  <InputGroupInput
+                    aria-label="Search files you can test"
+                    placeholder="Search files"
+                    value={search}
+                    onChange={(event) => setSearch(event.target.value)}
+                  />
+                </InputGroup>
+              </div>
+            )}
             <ul className="max-h-80 overflow-y-auto py-2 scroll-fade">
-              {sources.map((item) => (
+              {matches.slice(0, SOURCE_LIMIT).map((item) => (
                 <li key={item.path} className="px-6 py-1.5 font-mono text-xs">
                   {item.path}
                 </li>
               ))}
+              {matches.length > SOURCE_LIMIT && (
+                <li className="px-6 py-1.5 text-caption text-muted-foreground">
+                  and {matches.length - SOURCE_LIMIT} more
+                </li>
+              )}
+              {!matches.length && (
+                <li className="px-6 py-1.5 text-caption text-muted-foreground">
+                  No matching files.
+                </li>
+              )}
             </ul>
           </Card>
         </aside>
