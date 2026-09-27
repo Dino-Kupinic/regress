@@ -3,7 +3,7 @@ title: Reports and mutation scores
 description: What a run saves, how the mutation score is calculated, and how Regress decides which tests to keep.
 ---
 
-Every run writes a directory under the project's `.regress/runs/`. The directory name is the run ID: a timestamp followed by the source file's name, for example `20260926-230928-defu`. `.regress/` contains a `.gitignore` that keeps all of it out of Git.
+Every run writes a directory under the project's `.regress/runs/`. The directory name is the run ID: a timestamp, then the source file's name lowercased, with characters other than letters and digits turned into hyphens, for example `20260926-230928-defu`. A second run for the same file in the same second gets a numeric suffix. `.regress/` contains a `.gitignore` that keeps all of it out of Git.
 
 ## Run directory
 
@@ -19,15 +19,17 @@ Every run writes a directory under the project's `.regress/runs/`. The directory
 │   ├── 01-generated-attempt1.prompt.md
 │   └── 01-generated-attempt1.response.json
 ├── vitest/
-│   ├── baseline.json        # Vitest JSON reports and logs
-│   └── baseline.log
+│   ├── baseline.json        # existing-test run
+│   ├── baseline.log
+│   ├── 01-generated-attempt1.json
+│   └── 01-generated-attempt1.log
 └── stryker/
     ├── mutation-1.json      # Stryker mutation reports
     ├── stryker-1.config.json
     └── stryker-1.log
 ```
 
-Each model call saves its prompt and raw response under `llm/`, named by call number, stage, and attempt. Each validation saves a Vitest report and log; each mutation run saves Stryker's report, configuration, and log. Tool logs keep the last 1 MiB of output.
+Each model call saves its prompt and raw response under `llm/`, named by call number, stage, and attempt (`01-generated-attempt1`). Vitest writes `{name}.json` and `{name}.log` for that same name; the existing-test run is `baseline`. Stryker files are numbered from 1 in the order mutation runs happen, which is not the stage index: `mutation-1.json` is the first mutation run, whether that was the baseline or the generated tests. Tool logs keep the last 1 MiB of output. Test snapshots use the test file's suffix, so a `*.spec.ts` file is saved as `0-baseline.spec.ts` rather than `0-baseline.test.ts`.
 
 While an API run is in progress its directory also holds `.api-recovery.json`, the record used to restore the source and test files if the server is killed. It is removed when the run ends. Leave it in place after a crash; see [recovery](/docs/deployment/application#recovery-after-interruption).
 
@@ -50,7 +52,7 @@ A run records one stage per version of the test file:
 | --- | --- | --- |
 | **Existing tests** (`baseline`) | Always, when a test file exists. Mutation-tested only with `--baseline` or `--no-generate`. | The tests you already had. |
 | **Generated tests** (`generated`) | Unless `--no-generate`. | The model's first proposal, after validation. |
-| **Improved tests** (`improved`) | Once per improvement round. | A proposal that targets the previous stage's undetected mutants. |
+| **Improved tests** (`improved`) | Once per improvement round. With more than one round the label is `Improved tests (round N)`. | A proposal that targets the previous stage's undetected mutants. |
 
 A proposal that still fails validation after `max_repairs` retries is recorded as a **rejected** stage with its problems. Rejected stages are shown in the report but never kept.
 
@@ -65,12 +67,13 @@ Stryker changes the source file in small ways, one mutant at a time, and runs th
 | Survived | undetected | Tests covered the mutated code, but all passed. |
 | No coverage | undetected | No test ran the mutated code. |
 | Compile or runtime error | excluded | The mutant could not run at all. |
-
-The score is:
+| Ignored or pending | excluded | Not included in the numerator or the denominator. |
 
 ```text
 score = (killed + timeout) / (killed + timeout + survived + no coverage) × 100
 ```
+
+In `regress run` and `regress report`, the **Killed** figure is `killed + timeout`. The web app and `report.json` keep those counts separate. The formula uses the separate counts.
 
 Only the selected source file is mutated, and only the selected test file runs. The score describes how well that one test file pins down that one source file. It is not coverage for the whole project, and a high score does not prove the implementation is correct.
 

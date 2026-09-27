@@ -58,7 +58,7 @@ Choose a test file explicitly when your layout is unusual or several candidates 
 regress run src/cart.ts --test test/cart.test.ts
 ```
 
-Paths passed on the CLI are relative to your current working directory. The test file must stay within the detected project and must differ from the source. If no existing test file is found, Regress creates one under an existing `test/` or `tests/` directory, preserving the source's relative directory layout without a leading `src/` or `lib/`. Otherwise it creates the test beside the source.
+Paths passed on the CLI are relative to your current working directory. The test file must stay within the detected project and must differ from the source. If no existing test file is found, Regress creates `{name}.test{ext}` under an existing `test/` directory, or under `tests/` when there is no `test/` directory. The new file keeps the source's relative directory layout without a leading `src/` or `lib/`. When neither directory exists, Regress creates the test beside the source.
 
 Existing tests must pass against the current implementation. Regress preserves their test names and validates generated candidates before accepting them. It uses the implementation as the source of truth for regression behavior.
 

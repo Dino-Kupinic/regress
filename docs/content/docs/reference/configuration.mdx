@@ -22,7 +22,7 @@ The web app's **Settings** page and `regress models --set` write the personal co
 | `reasoning_effort` | unset | `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` | Reasoning effort for reasoning models. Unset uses the model's default. |
 | `rounds` | `1` | 0–5 | Improvement rounds after the first mutation run. |
 | `max_repairs` | `2` | 0–5 | Retries when a proposed test file fails validation. |
-| `max_mutants` | `40` | 1–200 | Undetected mutants sent to the model per improvement round. |
+| `max_mutants` | `40` | 1–200 | Undetected mutants sent to the model per improvement round. When more survive, Regress spreads the selection across the file: one mutant per line and operator first, then duplicates. |
 | `runner` | `auto` | `auto`, `bun`, `npx` | How to run Vitest and Stryker. `auto` prefers Bun and falls back to npx. |
 | `llm_timeout` | `120` | 30–3600 s | Silence from the model before Regress retries, up to three attempts. |
 | `llm_max_duration` | `1800` | 30–14400 s | Total time allowed for one proposal, including retries. |
@@ -32,7 +32,7 @@ The web app's **Settings** page and `regress models --set` write the personal co
 
 Unknown keys, values outside these ranges, and values of the wrong type are rejected with the file that contains them. Strings are not converted: write `rounds = 2`, not `rounds = "2"`.
 
-The web app's Settings page edits the most common keys. Set `llm_max_duration`, `llm_max_output_tokens`, and the reasoning efforts not offered there in TOML, or through `PATCH /api/settings`.
+The web app's Settings page edits the most common keys. Its reasoning-effort choices are the model's default, `low`, `medium`, and `high`. Set `none`, `minimal`, `xhigh`, `max`, `llm_max_duration`, and `llm_max_output_tokens` in TOML, or through `PATCH /api/settings`.
 
 ## Project config
 
@@ -87,6 +87,6 @@ The container variables are described in [Deploy the application](/docs/deployme
 
 ## Choosing the model
 
-The model list comes from the OpenAI API and is cached for a day. When the list cannot be fetched, Regress falls back to the models known to the installed SDK; that list does not prove your key can use them.
+The model list comes from the OpenAI API and is cached for a day. The CLI and the settings page show the 10 newest text models, plus the current default when it is not already listed. `regress models --all` and `GET /api/models?all=true` add older text models and dated snapshots. If a refresh fails and a cache exists, Regress keeps that cache and notes that the API could not be reached. With no cache, it falls back to the text models known to the installed SDK. That fallback does not prove your key can use them. The short list omits non-text models, shut-down models, and legacy `gpt-3.5` / `gpt-4` IDs. A verified catalog still accepts any other ID your key can use when you type it or pass `--model`.
 
 The effective model for a run is chosen in this order: `--model` (or the model chosen in the web app's New run panel), `REGRESS_MODEL`, `regress.toml`, the personal config, then the built-in default. A CLI run asks which model to use only when none of the first two is set, `ask_model` is true, and the terminal is interactive. `--yes` also skips the question.

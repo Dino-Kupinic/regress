@@ -65,11 +65,11 @@ Open **Runs** at `/runs` to browse saved runs, filter by source file and status,
 
 ## Change settings
 
-Open **Settings** at `/settings`. You can refresh the model list, choose a personal default, toggle the CLI model question, select a reasoning effort, and edit run defaults, timeouts, or runner preference. Choose **Save changes** to persist edits or **Discard** to restore the loaded values.
+Open **Settings** at `/settings`. You can choose a personal default, toggle the CLI model question, select a reasoning effort, and edit run defaults, timeouts, or runner preference. **Refresh models** reloads that short list from the API. It does not pass `refresh=true`, so a catalog cached for less than a day is reused. Fetch again with `regress models --refresh` or `GET /api/models?refresh=true`. Choose **Save changes** to persist edits or **Discard** to restore the loaded values.
 
 Settings are saved to the server user's personal Regress configuration. A project's `regress.toml` or environment variables can still override them. The page shows the model's source and the order of configuration layers. In a hosted deployment these are shared server settings, not per-browser preferences.
 
-The UI exposes a subset of the full settings. For example, `llm_max_duration` and `llm_max_output_tokens` are configured in TOML or through the API. See [Configuration](/docs/reference/configuration) for all supported keys.
+The UI exposes a subset of the full settings. Reasoning effort there is the model's default, low, medium, or high. `none`, `minimal`, `xhigh`, `max`, `llm_max_duration`, and `llm_max_output_tokens` are configured in TOML or through the API. See [Configuration](/docs/reference/configuration) for all supported keys. The model list on this page is the same short list as `regress models`, not `regress models --all`.
 
 ## Run an evaluation
 

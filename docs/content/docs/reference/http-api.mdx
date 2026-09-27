@@ -28,7 +28,7 @@ The server binds to `127.0.0.1` by default and has no authentication of its own.
 
 | Method | Path | Returns |
 | --- | --- | --- |
-| `GET` | `/health` | Liveness and the API version. |
+| `GET` | `/health` | Liveness: `status` (`ok`), the API `version`, and `project_root`. The deployment's unauthenticated `/healthz` proxies to `/ready` instead, which does not include the project path. |
 | `GET` | `/ready` | `200` when the project, installed tools, API key presence, and artifact storage are ready; `503` with the failing checks otherwise. |
 | `GET` | `/project` | Project root and name, config file, installed package versions, toolchain, problems preventing a run, whether the API key is set, and the active run. |
 | `POST` | `/project/init` | Installs missing dependencies and writes `regress.toml`, like `regress init --yes`. Can take minutes. |
@@ -42,7 +42,7 @@ The server binds to `127.0.0.1` by default and has no authentication of its own.
 | --- | --- | --- |
 | `GET` | `/settings` | Effective settings, where the model comes from, the personal config and its path, and the project config path. |
 | `PATCH` | `/settings` | Saves keys to the personal config. Send only the keys to change; `null` removes a key. |
-| `GET` | `/models?refresh=false&all=false` | Models your key can use, the default, and where the list came from. `refresh=true` skips the day-long cache; `all=true` includes older models and snapshots. |
+| `GET` | `/models?refresh=false&all=false` | Models your key can use, the default, and where the list came from. Without `all=true` the list is the 10 newest text models, plus the configured default if it is not already included. `refresh=true` skips the day-long cache; `all=true` includes older text models and dated snapshots. |
 
 ### Runs
 
@@ -111,7 +111,7 @@ A finished run replays its log and ends straight away.
 
 ## One job at a time
 
-The server runs one project operation at a time: a run, an evaluation, or a dependency install. Starting another while one is active returns `409` with a message that names what is running. A second API server for the same project fails at startup, because the first holds an exclusive lock on the project.
+The server runs one project operation at a time: a run, an evaluation, or a dependency install. Starting another while one is active returns `409` with a message that names what is running. A second API server for the same project does not own it while the first holds the lock. It still answers `/api/ready` during that wait, then the process exits if the lock is still held after 30 seconds.
 
 ## Errors
 

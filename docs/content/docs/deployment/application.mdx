@@ -77,7 +77,7 @@ The second request should return `401`; the third prompts for your password. Sub
 | Endpoint | Authentication | Meaning |
 | --- | --- | --- |
 | `/healthz` | None | Readiness: project settings, installed tools, API key presence, and writable artifact storage. Returns `200` or `503`. |
-| `/api/health` | Required through Nginx | Liveness and API version. |
+| `/api/health` | Required through Nginx | Liveness, API version, and `project_root`. |
 | `/api/ready` | Required through Nginx | The backend readiness result. |
 | `/api/project` | Required through Nginx | Project details and problems preventing a run. |
 
@@ -87,11 +87,11 @@ The Docker image already includes a `/healthz` check with a 30-second interval, 
 
 ## Run one instance per project
 
-Keep one application instance and one API worker for each writable project. An exclusive filesystem lock prevents a second API server from opening the same project. Runs, evaluations, and dependency installs share a reservation, including cancellation and cleanup.
+Keep one application instance for each writable project. An exclusive filesystem lock prevents a second API server from owning the same project. Runs, evaluations, and dependency installs share a reservation, including cancellation and cleanup. Do not run standalone CLI mutation jobs against the project while the API is serving it.
 
-Stop the old container before starting its replacement against the same volume. Overlapping rolling deployments against one writable project are unsupported. Do not run standalone CLI mutation jobs against the project while the API is serving it.
+A replacement container may start while the previous one is still stopping. While it waits up to 30 seconds for the lock, it answers `/healthz` as ready so the platform can stop the old container. If the old process still holds the lock when that wait ends, the new process exits. That ready response does not mean the new process has taken over the project yet. Do not leave two servers running against the same volume.
 
-The entrypoint allows up to 25 seconds for service shutdown. Python first cancels workers cooperatively so it can restore source and test files, then escalates for stuck workers. Tini reaps orphaned child processes. This is why the platform must allow at least 30 seconds before forcing the container to stop.
+On SIGTERM the entrypoint waits up to 25 seconds, then sends SIGKILL. Uvicorn's graceful-shutdown limit is 15 seconds. During shutdown Python cancels workers so they can restore source and test files, and escalates when a worker does not finish. Tini reaps orphaned child processes. Give the platform at least 30 seconds before it forces the container to stop.
 
 ## Recovery after interruption
 

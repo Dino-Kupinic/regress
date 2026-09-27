@@ -16,7 +16,7 @@ Follow [Installation](/docs/getting-started/installation) to install Python, exa
 | `src/regress/validate.py` | Candidate test-file checks. |
 | `src/regress/llm.py`, `prompts.py`, `mutants.py` | Model requests, prompts, and mutation feedback. |
 | `src/regress/config.py`, `catalog.py`, `store.py` | Layered settings, model catalog, and run artifacts. |
-| `src/regress/api/` | FastAPI routes, schemas, background workers, streaming events, and recovery. |
+| `src/regress/api/` | FastAPI routes, schemas, run processes (`jobs.py`), saved runs (`results.py`), evaluations (`evaluations.py`), streaming events, and recovery. |
 | `src/regress/evaluation.py` | Evaluation against the bundled hidden bugs. |
 | `web/app/` | React Router application, pages, components, and API client. |
 | `examples/` | Vitest/Stryker project, weak initial tests, hidden bugs, and oracle suites. |

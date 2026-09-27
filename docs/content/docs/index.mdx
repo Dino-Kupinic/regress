@@ -25,7 +25,7 @@ Use the **CLI** for a local project or the **web dashboard** to start runs and i
 ## The feedback loop
 
 1. **Check the starting point.** Regress loads the source and existing tests, verifies the toolchain, and runs the existing tests if present.
-2. **Generate and validate.** The model proposes a complete test file. Regress rejects candidates that fail, remove existing tests, mock the target module, skip tests, or change the source.
+2. **Generate and validate.** The model proposes a complete test file. Regress rejects candidates that fail, remove or rename existing tests, mock the target module, contain `.only`, add new skipped tests, or change the source.
 3. **Measure with mutation testing.** Stryker changes the target implementation in small ways. A mutant is detected when the test run fails or times out. Surviving or uncovered mutants identify gaps to investigate.
 4. **Improve from feedback.** Regress sends a selection of undetected mutants to the model, validates its next proposal, and measures it again.
 5. **Review what was kept.** Improvement rounds keep a candidate only when its score is at least as high as the current candidate. Reports preserve stage details, test snapshots, tool logs, and model calls.
