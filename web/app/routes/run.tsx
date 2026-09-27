@@ -72,6 +72,7 @@ import {
   ItemGroup,
   ItemTitle,
 } from "~/components/ui/item";
+import { Kbd } from "~/components/ui/kbd";
 import { Progress } from "~/components/ui/progress";
 import {
   Select,
@@ -159,8 +160,13 @@ export default function RunPage() {
       queryClient.invalidateQueries({ queryKey: ["runs"] });
     },
   });
-  const setTab = (next: Tab) =>
-    setParams(next === "overview" ? {} : { tab: next }, { replace: true });
+  const setTab = (next: Tab, line?: number) =>
+    setParams(
+      next === "overview"
+        ? {}
+        : { tab: next, ...(line ? { line: String(line) } : {}) },
+      { replace: true },
+    );
   const measured = run.report.stages.filter(
     (stage) => stage.mutation && !stage.rejected,
   );
@@ -527,15 +533,7 @@ function LiveRun({ run, events }: { run: RunDetail; events: RunEvent[] }) {
             <CardContent className="flex flex-col gap-3">
               {latestMutation ? (
                 <>
-                  <Progress
-                    value={
-                      latestMutation.mutants.length
-                        ? (latestMutation.killed /
-                            latestMutation.mutants.length) *
-                          100
-                        : 0
-                    }
-                  />
+                  <Progress value={latestMutation.score} />
                   <p className="text-caption text-muted-foreground">
                     {latestMutation.killed} killed · {latestMutation.survived}{" "}
                     survived · {latestMutation.no_coverage} uncovered
@@ -580,7 +578,7 @@ function Overview({
   setTab,
 }: {
   run: RunDetail;
-  setTab: (tab: Tab) => void;
+  setTab: (tab: Tab, line?: number) => void;
 }) {
   const stages = run.report.stages.filter((stage) => !stage.rejected);
   const measured = stages.filter((stage) => stage.mutation);
@@ -622,11 +620,13 @@ function Overview({
             <p className="text-display font-medium tabular-nums">
               {percent(run.summary.kept_score)}
             </p>
-            <CardAction>
-              <Badge variant="outline">
-                {signedPoints(run.summary.improvement)} vs first stage
-              </Badge>
-            </CardAction>
+            {measured.length > 1 && (
+              <CardAction>
+                <Badge variant="outline">
+                  {signedPoints(run.summary.improvement)} vs first stage
+                </Badge>
+              </CardAction>
+            )}
           </CardHeader>
           <CardContent>
             <ChartContainer
@@ -745,7 +745,9 @@ function Overview({
                   radius={[2, 2, 0, 0]}
                   maxBarSize={6}
                   className="cursor-pointer"
-                  onClick={() => setTab("mutants")}
+                  onClick={(item: { payload?: { line?: number } }) =>
+                    setTab("mutants", item.payload?.line)
+                  }
                 />
               </BarChart>
             </ChartContainer>
@@ -910,8 +912,20 @@ function Mutants({ run }: { run: RunDetail }) {
   );
   const [filter, setFilter] = useState<MutantFilter>("all");
   const [operator, setOperator] = useState("all");
-  const [line, setLine] = useState("");
+  const [params, setParams] = useSearchParams();
+  const line = params.get("line") ?? "";
+  const setLine = (value: string) =>
+    setParams(
+      (previous) => {
+        const next = new URLSearchParams(previous);
+        if (value) next.set("line", value);
+        else next.delete("line");
+        return next;
+      },
+      { replace: true },
+    );
   const [selected, setSelected] = useState<string | null>(null);
+  const code = useRef<HTMLDivElement>(null);
   const result = useQuery({
     queryKey: ["mutants", run.summary.id, stageIndex],
     queryFn: () => api.mutants(run.summary.id, stageIndex, "all"),
@@ -927,9 +941,49 @@ function Mutants({ run }: { run: RunDetail }) {
     (item) =>
       matchesFilter(item, filter) &&
       (operator === "all" || item.mutator === operator) &&
-      (!line || String(item.start_line).includes(line)),
+      (!line || item.start_line === Number(line)),
   );
-  const active = visible.find((item) => item.id === selected) ?? visible[0];
+  const activeIndex = Math.max(
+    0,
+    visible.findIndex((item) => item.id === selected),
+  );
+  const active = visible[activeIndex];
+  const step = (offset: number) => {
+    const next = visible[activeIndex + offset];
+    if (next) setSelected(next.id);
+  };
+  // Keep the selected mutant's line, or the line being looked up, in view.
+  const focusLine = line ? Number(line) : active?.start_line;
+  useEffect(() => {
+    const container = code.current;
+    const row = container?.querySelector<HTMLElement>(
+      `[data-line="${focusLine}"]`,
+    );
+    if (!container || !row) return;
+    const top = row.offsetTop - (container.clientHeight - row.clientHeight) / 2;
+    const visibleNow =
+      row.offsetTop >= container.scrollTop &&
+      row.offsetTop + row.clientHeight <=
+        container.scrollTop + container.clientHeight;
+    if (!visibleNow) container.scrollTo({ top, behavior: "smooth" });
+  }, [focusLine, source]);
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      const target = event.target as HTMLElement | null;
+      if (
+        target?.isContentEditable ||
+        target?.closest("input, textarea, select, [role=menu], [role=dialog]")
+      )
+        return;
+      if (event.key === "j") step(1);
+      else if (event.key === "k") step(-1);
+      else return;
+      event.preventDefault();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  });
   const byLine = new Map<number, Mutant[]>();
   for (const item of visible)
     byLine.set(item.start_line, [...(byLine.get(item.start_line) ?? []), item]);
@@ -1012,7 +1066,10 @@ function Mutants({ run }: { run: RunDetail }) {
               One square per mutant
             </CardAction>
           </CardHeader>
-          <div className="max-h-[720px] overflow-auto py-2 font-mono text-xs scroll-fade">
+          <div
+            ref={code}
+            className="relative max-h-[720px] overflow-auto py-2 font-mono text-xs scroll-fade"
+          >
             {source ? (
               source.content.split("\n").map((text, index) => {
                 const lineNo = index + 1;
@@ -1021,6 +1078,7 @@ function Mutants({ run }: { run: RunDetail }) {
                 return (
                   <div
                     key={lineNo}
+                    data-line={lineNo}
                     className={cn(
                       "grid min-h-6 grid-cols-[2.75rem_5.5rem_minmax(max-content,1fr)] items-center gap-2 border-l-2 border-transparent pr-4 pl-2",
                       isSelected && "border-foreground bg-accent",
@@ -1064,13 +1122,28 @@ function Mutants({ run }: { run: RunDetail }) {
             )}
           </div>
         </Card>
-        <MutantDetail mutant={active} />
+        <MutantDetail
+          mutant={active}
+          index={activeIndex}
+          total={visible.length}
+          onStep={step}
+        />
       </div>
     </div>
   );
 }
 
-function MutantDetail({ mutant }: { mutant?: Mutant }) {
+function MutantDetail({
+  mutant,
+  index,
+  total,
+  onStep,
+}: {
+  mutant?: Mutant;
+  index: number;
+  total: number;
+  onStep: (offset: number) => void;
+}) {
   if (!mutant) {
     return (
       <Card>
@@ -1148,6 +1221,29 @@ function MutantDetail({ mutant }: { mutant?: Mutant }) {
           )}
         </div>
       </CardContent>
+      <CardFooter className="justify-between gap-2 border-t pt-4">
+        <span className="text-caption text-muted-foreground tabular-nums">
+          {index + 1} of {total}
+        </span>
+        <div className="flex gap-1">
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={index === 0}
+            onClick={() => onStep(-1)}
+          >
+            Previous <Kbd>K</Kbd>
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={index >= total - 1}
+            onClick={() => onStep(1)}
+          >
+            Next <Kbd>J</Kbd>
+          </Button>
+        </div>
+      </CardFooter>
     </Card>
   );
 }
