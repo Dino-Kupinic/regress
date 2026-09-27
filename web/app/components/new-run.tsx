@@ -1,17 +1,51 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Copy, Search, X } from "lucide-react";
+import { Check, CircleAlert, Copy, Search, X } from "lucide-react";
 import {
   createContext,
   type ReactNode,
   useContext,
   useEffect,
-  useRef,
   useState,
 } from "react";
 import { useNavigate } from "react-router";
+import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import { Button } from "~/components/ui/button";
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+} from "~/components/ui/field";
 import { Input } from "~/components/ui/input";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from "~/components/ui/input-group";
+import { RadioGroup, RadioGroupItem } from "~/components/ui/radio-group";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "~/components/ui/select";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from "~/components/ui/sheet";
+import { Skeleton } from "~/components/ui/skeleton";
+import { Spinner } from "~/components/ui/spinner";
+import { Switch } from "~/components/ui/switch";
 import { api, type ProjectInfo } from "~/lib/api";
+import { copyToClipboard } from "~/lib/clipboard";
 import { fileName } from "~/lib/utils";
 
 type DrawerContext = { open: (source?: string) => void; opened: boolean };
@@ -20,6 +54,8 @@ const Context = createContext<DrawerContext>({
   opened: false,
 });
 export const useNewRun = () => useContext(Context);
+
+const DEFAULT_MODEL = "__default__";
 
 export function NewRunProvider({
   children,
@@ -31,12 +67,11 @@ export function NewRunProvider({
   const [opened, setOpened] = useState(false);
   const [source, setSource] = useState("");
   const [search, setSearch] = useState("");
-  const [model, setModel] = useState("");
+  const [model, setModel] = useState(DEFAULT_MODEL);
   const [rounds, setRounds] = useState(1);
   const [baseline, setBaseline] = useState(false);
   const [generate, setGenerate] = useState(true);
   const [error, setError] = useState("");
-  const closeRef = useRef<HTMLButtonElement>(null);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const sources = useQuery({
@@ -64,16 +99,6 @@ export function NewRunProvider({
     onError: (failure) => setError(failure.message),
   });
   useEffect(() => {
-    if (opened) {
-      closeRef.current?.focus();
-      const onKey = (event: KeyboardEvent) => {
-        if (event.key === "Escape") setOpened(false);
-      };
-      document.addEventListener("keydown", onKey);
-      return () => document.removeEventListener("keydown", onKey);
-    }
-  }, [opened]);
-  useEffect(() => {
     if (detail.data && !detail.data.test_file_exists) {
       setBaseline(false);
       setGenerate(true);
@@ -83,7 +108,7 @@ export function NewRunProvider({
     setSource(initial ?? "");
     setSearch("");
     setError("");
-    setModel("");
+    setModel(DEFAULT_MODEL);
     setBaseline(false);
     setGenerate(true);
     setRounds(1);
@@ -93,104 +118,120 @@ export function NewRunProvider({
     sources.data?.filter((item) =>
       item.path.toLowerCase().includes(search.toLowerCase()),
     ) ?? [];
+  const hasTests = !!detail.data?.test_file_exists;
   const command = `regress run ${source || "<source>"}${baseline ? " --baseline" : ""}${!generate ? " --no-generate" : ""} --rounds ${rounds} --yes`;
   return (
     <Context.Provider value={{ open, opened }}>
       {children}
-      {opened && (
-        <div className="drawer-layer">
-          <aside
-            className="drawer"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="new-run-title"
-          >
-            <header className="drawer-header">
-              <div>
-                <h2 id="new-run-title">New run</h2>
-                <p className="muted">
-                  Generate tests, mutation-test them, improve from survivors.
-                </p>
+      <Sheet open={opened} onOpenChange={setOpened}>
+        <SheetContent className="w-full gap-0 data-[side=right]:sm:max-w-lg">
+          <SheetHeader className="border-b p-6">
+            <SheetTitle className="text-subheading">New run</SheetTitle>
+            <SheetDescription>
+              Generate tests, mutation-test them, improve from survivors.
+            </SheetDescription>
+          </SheetHeader>
+          <div className="flex flex-1 flex-col gap-8 overflow-y-auto p-6 scroll-fade">
+            <section className="flex flex-col gap-3">
+              <div className="flex items-baseline justify-between">
+                <h3 className="font-medium">Source file</h3>
+                <span className="text-caption text-muted-foreground tabular-nums">
+                  {sources.data?.length ?? 0} files
+                </span>
               </div>
-              <Button
-                ref={closeRef}
-                variant="ghost"
-                size="icon"
-                aria-label="Close new run"
-                onClick={() => setOpened(false)}
-              >
-                <X size={17} />
-              </Button>
-            </header>
-            <div className="drawer-body">
-              <section>
-                <div className="row between">
-                  <h3>Source file</h3>
-                  <span className="muted small">
-                    {sources.data?.length ?? 0} files
-                  </span>
-                </div>
-                <label className="search-field" htmlFor="source-search">
-                  <Search size={16} />
-                  <Input
-                    id="source-search"
-                    className="pl-9"
-                    aria-label="Search source files"
-                    placeholder="Search files"
-                    value={search}
-                    onChange={(event) => setSearch(event.target.value)}
-                  />
-                </label>
-                <div className="file-picker">
-                  {filtered.map((item) => (
-                    <button
-                      key={item.path}
-                      type="button"
-                      className={`file-option ${source === item.path ? "selected" : ""}`}
-                      onClick={() => setSource(item.path)}
-                    >
-                      <span className="radio-mark" aria-hidden="true" />
-                      <span className="mono grow">{item.path}</span>
-                      <span className="muted small">{fileName(item.path)}</span>
-                    </button>
-                  ))}
-                  {!sources.isLoading && !filtered.length && (
-                    <p className="empty-inline">No matching source files.</p>
-                  )}
-                </div>
-                {detail.data && (
-                  <p className="small muted">
-                    <span className="mono">{detail.data.test_file}</span>{" "}
-                    {detail.data.test_file_exists
-                      ? "will be extended"
-                      : "will be created"}
-                    .
+              <InputGroup>
+                <InputGroupAddon>
+                  <Search />
+                </InputGroupAddon>
+                <InputGroupInput
+                  aria-label="Search source files"
+                  placeholder="Search files"
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                />
+              </InputGroup>
+              <div className="max-h-60 overflow-y-auto rounded-lg border scroll-fade">
+                {sources.isPending ? (
+                  <div className="flex flex-col gap-3 p-4">
+                    {[0, 1, 2].map((index) => (
+                      <Skeleton key={index} className="h-5" />
+                    ))}
+                  </div>
+                ) : filtered.length ? (
+                  <RadioGroup
+                    value={source}
+                    onValueChange={setSource}
+                    aria-label="Source file"
+                    className="gap-0 divide-y"
+                  >
+                    {filtered.map((item) => (
+                      <Field
+                        key={item.path}
+                        orientation="horizontal"
+                        className="px-4 py-3 transition-colors hover:bg-accent has-data-checked:bg-accent"
+                      >
+                        <RadioGroupItem
+                          value={item.path}
+                          id={`source-${item.path}`}
+                        />
+                        <FieldLabel
+                          htmlFor={`source-${item.path}`}
+                          className="truncate font-mono text-xs font-normal"
+                        >
+                          {item.path}
+                        </FieldLabel>
+                        <span className="text-caption text-muted-foreground">
+                          {fileName(item.path)}
+                        </span>
+                      </Field>
+                    ))}
+                  </RadioGroup>
+                ) : (
+                  <p className="p-4 text-sm text-muted-foreground">
+                    No matching source files.
                   </p>
                 )}
-              </section>
-              <section>
-                <h3>Options</h3>
-                <div className="form-grid">
-                  <label>
-                    Model
-                    <select
-                      value={model}
-                      onChange={(event) => setModel(event.target.value)}
-                    >
-                      <option value="">
-                        {models.data?.default_model ?? "Configured default"}
-                      </option>
-                      {models.data?.models
-                        .filter(
-                          (entry) => entry.id !== models.data?.default_model,
-                        )
-                        .map((entry) => (
-                          <option key={entry.id}>{entry.id}</option>
-                        ))}
-                    </select>
-                  </label>
-                  <label htmlFor="run-rounds">
-                    Improvement rounds
+              </div>
+              {detail.data && (
+                <p className="text-caption text-muted-foreground motion-safe:animate-in fade-in-0">
+                  <span className="font-mono text-foreground">
+                    {detail.data.test_file}
+                  </span>{" "}
+                  will be {hasTests ? "extended" : "created"}.
+                </p>
+              )}
+            </section>
+            <section className="flex flex-col gap-4">
+              <h3 className="font-medium">Options</h3>
+              <FieldGroup>
+                <div className="grid grid-cols-[1fr_9rem] gap-3">
+                  <Field>
+                    <FieldLabel htmlFor="run-model">Model</FieldLabel>
+                    <Select value={model} onValueChange={setModel}>
+                      <SelectTrigger id="run-model" className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          <SelectItem value={DEFAULT_MODEL}>
+                            {models.data?.default_model ?? "Configured default"}
+                          </SelectItem>
+                          {models.data?.models
+                            .filter(
+                              (entry) =>
+                                entry.id !== models.data?.default_model,
+                            )
+                            .map((entry) => (
+                              <SelectItem key={entry.id} value={entry.id}>
+                                {entry.id}
+                              </SelectItem>
+                            ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="run-rounds">Rounds</FieldLabel>
                     <Input
                       id="run-rounds"
                       type="number"
@@ -203,114 +244,151 @@ export function NewRunProvider({
                         )
                       }
                     />
-                  </label>
+                  </Field>
                 </div>
-                <label className="toggle-row">
-                  <span>
-                    <strong>Measure baseline</strong>
-                    <small>Mutation-test existing tests first</small>
-                  </span>
-                  <input
-                    type="checkbox"
+                <Field orientation="horizontal" data-disabled={!hasTests}>
+                  <FieldContent>
+                    <FieldLabel htmlFor="run-baseline">
+                      Measure baseline
+                    </FieldLabel>
+                    <FieldDescription>
+                      Mutation-test the existing tests first
+                    </FieldDescription>
+                  </FieldContent>
+                  <Switch
+                    id="run-baseline"
                     checked={baseline}
-                    disabled={!detail.data?.test_file_exists}
-                    onChange={(event) => setBaseline(event.target.checked)}
+                    disabled={!hasTests}
+                    onCheckedChange={setBaseline}
                   />
-                </label>
-                <label className="toggle-row">
-                  <span>
-                    <strong>Skip generation</strong>
-                    <small>Improve the existing test file directly</small>
-                  </span>
-                  <input
-                    type="checkbox"
+                </Field>
+                <Field orientation="horizontal" data-disabled={!hasTests}>
+                  <FieldContent>
+                    <FieldLabel htmlFor="run-skip-generation">
+                      Skip generation
+                    </FieldLabel>
+                    <FieldDescription>
+                      Improve the existing test file directly
+                    </FieldDescription>
+                  </FieldContent>
+                  <Switch
+                    id="run-skip-generation"
                     checked={!generate}
-                    disabled={!detail.data?.test_file_exists}
-                    onChange={(event) => setGenerate(!event.target.checked)}
+                    disabled={!hasTests}
+                    onCheckedChange={(checked) => setGenerate(!checked)}
                   />
-                </label>
-              </section>
-              <section>
-                <h3>Pre-flight</h3>
-                <div className="preflight">
-                  {project?.packages.map((item) => (
-                    <div key={item.name} className="row gap-sm">
-                      <Check
-                        size={14}
-                        className={item.version ? "success" : "danger"}
-                      />
-                      <span className="mono">{item.name}</span>
-                      <span className="push muted">
-                        {item.version ?? "Missing"}
-                      </span>
-                    </div>
-                  ))}
-                  <div className="row gap-sm">
-                    <Check
-                      size={14}
-                      className={project?.api_key_set ? "success" : "danger"}
-                    />
-                    <span>OPENAI_API_KEY</span>
-                    <span className="push muted">
-                      {project?.api_key_set ? "Set on server" : "Not set"}
-                    </span>
-                  </div>
-                </div>
-                {!project?.ready && (
-                  <p className="error-text small">
-                    {project?.problems.join(" ")}
-                  </p>
-                )}
-              </section>
-            </div>
-            <footer className="drawer-footer">
-              <div className="command row">
-                <code>{command}</code>
-                <button
-                  type="button"
-                  onClick={() => navigator.clipboard.writeText(command)}
-                  aria-label="Copy command"
-                >
-                  <Copy size={15} />
-                </button>
-              </div>
-              {error && (
-                <p className="error-text" role="alert">
-                  {error}
-                </p>
+                </Field>
+              </FieldGroup>
+            </section>
+            <section className="flex flex-col gap-3">
+              <h3 className="font-medium">Pre-flight</h3>
+              <ul className="flex flex-col divide-y rounded-lg bg-muted/60 text-sm">
+                {project?.packages.map((item) => (
+                  <PreflightRow
+                    key={item.name}
+                    ok={!!item.version}
+                    label={item.name}
+                    value={item.version ?? "Missing"}
+                  />
+                ))}
+                <PreflightRow
+                  ok={!!project?.api_key_set}
+                  label="OPENAI_API_KEY"
+                  value={project?.api_key_set ? "Set on server" : "Not set"}
+                />
+              </ul>
+              {project && !project.ready && (
+                <Alert variant="destructive">
+                  <CircleAlert />
+                  <AlertTitle>Not ready to run</AlertTitle>
+                  <AlertDescription>
+                    {project.problems.join(" ")}
+                  </AlertDescription>
+                </Alert>
               )}
-              <div className="row between">
-                <span className="small muted">One run at a time</span>
-                <div className="row gap-sm">
-                  <Button variant="ghost" onClick={() => setOpened(false)}>
-                    Cancel
-                  </Button>
-                  <Button
-                    disabled={
-                      !source ||
-                      !detail.data ||
-                      !project?.ready ||
-                      run.isPending ||
-                      !!project.active_run
-                    }
-                    onClick={() =>
-                      run.mutate({
-                        source,
-                        model: model || undefined,
-                        rounds,
-                        baseline: baseline && !!detail.data?.test_file_exists,
-                        generate: generate || !detail.data?.test_file_exists,
-                      })
-                    }
-                  >
-                    {run.isPending ? "Starting…" : "Start run"}
-                  </Button>
-                </div>
+            </section>
+          </div>
+          <SheetFooter className="gap-4 border-t p-6">
+            <InputGroup>
+              <InputGroupInput
+                readOnly
+                value={command}
+                aria-label="Equivalent CLI command"
+                className="font-mono text-xs"
+              />
+              <InputGroupAddon align="inline-end">
+                <InputGroupButton
+                  size="icon-xs"
+                  aria-label="Copy command"
+                  onClick={() => copyToClipboard(command, "Command copied")}
+                >
+                  <Copy />
+                </InputGroupButton>
+              </InputGroupAddon>
+            </InputGroup>
+            {error && (
+              <Alert variant="destructive">
+                <CircleAlert />
+                <AlertTitle>Could not start the run</AlertTitle>
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            )}
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-caption text-muted-foreground">
+                One run at a time
+              </span>
+              <div className="flex gap-2">
+                <Button variant="ghost" onClick={() => setOpened(false)}>
+                  Cancel
+                </Button>
+                <Button
+                  disabled={
+                    !source ||
+                    !detail.data ||
+                    !project?.ready ||
+                    run.isPending ||
+                    !!project.active_run
+                  }
+                  onClick={() =>
+                    run.mutate({
+                      source,
+                      model: model === DEFAULT_MODEL ? undefined : model,
+                      rounds,
+                      baseline: baseline && hasTests,
+                      generate: generate || !hasTests,
+                    })
+                  }
+                >
+                  {run.isPending && <Spinner data-icon="inline-start" />}
+                  {run.isPending ? "Starting" : "Start run"}
+                </Button>
               </div>
-            </footer>
-          </aside>
-        </div>
-      )}
+            </div>
+          </SheetFooter>
+        </SheetContent>
+      </Sheet>
     </Context.Provider>
+  );
+}
+
+function PreflightRow({
+  ok,
+  label,
+  value,
+}: {
+  ok: boolean;
+  label: string;
+  value: string;
+}) {
+  return (
+    <li className="flex items-center gap-3 px-4 py-2.5">
+      {ok ? (
+        <Check className="size-4 text-success" />
+      ) : (
+        <X className="size-4 text-destructive" />
+      )}
+      <span className="flex-1 truncate font-mono text-xs">{label}</span>
+      <span className="text-caption text-muted-foreground">{value}</span>
+    </li>
   );
 }
