@@ -390,9 +390,9 @@ function LiveRun({ run, events }: { run: RunDetail; events: RunEvent[] }) {
                 {events.map((event) => (
                   <li
                     key={event.seq}
-                    className="grid grid-cols-[4.5rem_0.5rem_1fr] items-baseline gap-3 px-6 py-2 text-sm motion-safe:animate-in fade-in-0 slide-in-from-bottom-1"
+                    className="grid grid-cols-[6.5rem_0.5rem_1fr] items-baseline gap-3 px-6 py-2 text-sm motion-safe:animate-in fade-in-0 slide-in-from-bottom-1"
                   >
-                    <time className="font-mono text-xs text-muted-foreground">
+                    <time className="font-mono text-xs whitespace-nowrap text-muted-foreground">
                       {new Date(event.time).toLocaleTimeString(undefined, {
                         hour: "2-digit",
                         minute: "2-digit",
@@ -417,7 +417,7 @@ function LiveRun({ run, events }: { run: RunDetail; events: RunEvent[] }) {
               </p>
             )}
             {run.live?.activity && (
-              <div className="mx-3 my-1 grid grid-cols-[4.5rem_0.5rem_1fr] items-baseline gap-3 rounded-md bg-accent px-3 py-2 text-sm">
+              <div className="mx-3 my-1 grid grid-cols-[6.5rem_0.5rem_1fr] items-baseline gap-3 rounded-md bg-accent px-3 py-2 text-sm">
                 <span className="font-mono text-xs text-muted-foreground">
                   now
                 </span>
