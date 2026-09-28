@@ -101,3 +101,31 @@ docker build --tag regress:local .
 ```
 
 Use [Application deployment](/docs/deployment/application) for runtime variables, persistent storage, graceful shutdown, and health checks.
+
+## Commit messages and releases
+
+Regress uses [Semantic Versioning](https://semver.org). Releases are automatic: nobody edits the version by hand. After the Backend workflow passes on a push to `main`, which includes a merged pull request, the Release workflow reads the [Conventional Commits](https://www.conventionalcommits.org) added since the last tag and decides the next version:
+
+| Commit type | Effect |
+| --- | --- |
+| `feat:` | Minor release (`0.1.0` to `0.2.0`) |
+| `fix:`, `perf:` | Patch release (`0.1.0` to `0.1.1`) |
+| `feat!:`, `fix!:`, or a `BREAKING CHANGE:` footer | Minor release while the version is below `1.0.0`, and a major release from `1.0.0` |
+| `docs:`, `chore:`, `ci:`, `refactor:`, `test:`, `build:`, `style:` | No release on their own |
+
+A merge that contains only commits from the last row publishes nothing. A commit without a recognised type prefix never triggers a release. Merge commits are ignored, but the commits inside the merged pull request all count.
+
+A release does four things:
+
+1. Updates the version in `pyproject.toml`, `src/regress/__init__.py` (reported by `GET /api/health`) and `uv.lock`.
+2. Adds the release to `CHANGELOG.md`.
+3. Commits that as `chore(release): X.Y.Z [skip ci]` and tags it `vX.Y.Z`.
+4. Creates a GitHub Release with the changelog entry as its notes.
+
+To preview the next version, check out `main` and run this from the repository root. Releases are only made from `main`, so on any other branch it reports that no release will be made.
+
+```bash
+uvx --from "python-semantic-release~=10.7" semantic-release --noop version --print
+```
+
+`--noop` changes nothing. Without it the command commits, tags, and pushes to `origin`, so leave real releases to the workflow.

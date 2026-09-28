@@ -1,0 +1,54 @@
+name: Release
+
+# Runs after the Backend workflow passes on a push to main (which includes a merged pull request).
+# python-semantic-release reads the Conventional Commits since the last tag. If any of them warrant a
+# release it bumps the version, updates CHANGELOG.md, commits, tags vX.Y.Z and creates a GitHub Release.
+# Configuration lives in [tool.semantic_release] in pyproject.toml.
+on:
+  workflow_run:
+    workflows: [Backend]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+# Never run two releases at once; a queued run picks up whatever the earlier one left behind.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      # The Backend run tested one commit. If main has moved on, the run for the newer commit
+      # will release everything since the last tag, so this one steps aside.
+      - name: Check that main is still the commit that passed
+        id: tip
+        env:
+          TESTED_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          if [ "$(git rev-parse HEAD)" = "$TESTED_SHA" ]; then
+            echo "current=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "current=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::main moved past $TESTED_SHA; the run for the newer commit will release."
+          fi
+      - if: steps.tip.outputs.current == 'true'
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.10.11"
+      - if: steps.tip.outputs.current == 'true'
+        name: Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: uvx --from "python-semantic-release~=10.7" semantic-release -v version
