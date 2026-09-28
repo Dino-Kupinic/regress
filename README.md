@@ -319,6 +319,8 @@ The integration tests drive the full pipeline with a scripted model against real
 
 The Backend GitHub Actions workflow runs lint, formatting, unit and integration tests, then builds the production container and smoke-tests readiness and proxy authentication. Tests use scripted models and do not call OpenAI.
 
+Versions follow [Semantic Versioning](https://semver.org) and are released automatically. When the Backend workflow passes on a push to `main` (including a merged pull request), the Release workflow reads the [Conventional Commits](https://www.conventionalcommits.org) since the last tag: `feat:` makes a minor release, `fix:` or `perf:` a patch, and `docs:`, `chore:` and the like make none. A release bumps the version, updates `CHANGELOG.md`, tags `vX.Y.Z` and publishes a GitHub Release. [Develop Regress](docs/content/docs/getting-started/development.mdx#commit-messages-and-releases) has the details.
+
 Code map (`src/regress/`):
 
 | Module | Role |
