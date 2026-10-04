@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
-import stat
 from pathlib import Path
 
 from fastapi import HTTPException
@@ -26,10 +24,10 @@ from regress.errors import ProjectError, ToolError
 from regress.files import atomic_write_text
 from regress.process import run_command
 from regress.project import (
+    MAX_FILE_BYTES,
     REQUIRED_PACKAGES,
     SKIP_DIRS,
     SOURCE_EXTENSIONS,
-    TEST_DIRS,
     default_test_path,
     detect_toolchain,
     find_test_file,
@@ -38,12 +36,11 @@ from regress.project import (
     is_test_file,
     package_version,
     planned_installs,
+    source_files,
 )
 from regress.store import regress_dir
 
-MAX_FILE_BYTES = 1_000_000
 INSTALL_TIMEOUT = 600
-_CONFIG_NAME = re.compile(r"\.(config|conf)\.[cm]?[jt]sx?$|\.d\.[cm]?ts$")
 
 
 def project_info(manager: RunManager) -> ProjectInfo:
@@ -103,34 +100,8 @@ def init_project(manager: RunManager) -> InitResult:
 
 
 def list_sources(root: Path) -> list[SourceFile]:
-    """Files a run can target: JavaScript and TypeScript sources, without tests, configs, or type declarations.
-
-    Each one passes the path checks of `source_detail`: it is readable (not hidden, not too large) and
-    belongs to this project rather than a nested one with its own package.json.
-    """
-    found = []
-    for directory, dirnames, filenames in os.walk(root):
-        here = Path(directory)
-        if here != root and "package.json" in filenames and (here / "package.json").is_file():
-            dirnames.clear()  # a nested project: none of its files are this project's sources
-            continue
-        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and d not in TEST_DIRS and not d.startswith(".")]
-        for name in filenames:
-            path = here / name
-            if (
-                name.startswith(".")
-                or path.suffix not in SOURCE_EXTENSIONS
-                or is_test_file(path)
-                or ".oracle." in name
-                or _CONFIG_NAME.search(name)
-            ):
-                continue
-            try:
-                info = path.lstat()  # lstat, so a symlink is never taken for the file it points to
-            except FileNotFoundError:
-                continue
-            if stat.S_ISREG(info.st_mode) and info.st_size <= MAX_FILE_BYTES:
-                found.append(SourceFile(path=path.relative_to(root).as_posix(), size=info.st_size))
+    """Files a run can target, with their sizes."""
+    found = [SourceFile(path=p.relative_to(root).as_posix(), size=p.lstat().st_size) for p in source_files(root)]
     return sorted(found, key=lambda f: f.path)
 
 
