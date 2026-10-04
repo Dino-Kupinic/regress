@@ -11,6 +11,7 @@ from regress.batch import BatchReport, BatchTotals
 from regress.catalog import Source as CatalogSource
 from regress.config import FILE_ONLY_SETTINGS, ModelSource, Settings
 from regress.models import Mutant, RunReport, RunStatus, StageKind
+from regress.pricing import Price
 from regress.project import Runner
 from regress.providers import ProviderName
 
@@ -152,6 +153,48 @@ class RunRequest(BaseModel):
         default=True, description="Start with a one-shot generation round; false improves the existing tests directly."
     )
     runner: Runner | None = Field(default=None, description="How to run Vitest and Stryker.")
+    max_cost: float | None = Field(
+        default=None, gt=0, le=10_000, description="Budget in USD per run; defaults to the configured max_cost."
+    )
+
+
+class EstimateRequest(BaseModel):
+    """What a run (or a multi-file run) would cost, before starting it."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    sources: list[str] = Field(min_length=1, max_length=MAX_BATCH_FILES, description="Source files to estimate.")
+    model: str | None = Field(
+        default=None, description="Model ID, or provider:model. Defaults to the configured model."
+    )
+    rounds: int | None = Field(default=None, ge=0, le=5)
+    generate: bool = True
+    max_cost: float | None = Field(default=None, gt=0, le=10_000)
+
+
+class FileEstimate(BaseModel):
+    source_file: str
+    input_tokens: int
+    output_tokens: int
+    expected_usd: float | None
+    max_usd: float | None
+
+
+class CostEstimate(BaseModel):
+    """Expected and worst-case spend. Token counts are rough (about 4 characters per token)."""
+
+    model: str
+    provider: ProviderName
+    price: Price | None = Field(description="USD per million tokens; null when Regress has no price for the model.")
+    prices_as_of: str = Field(description="When the bundled prices were last checked; [prices] in config overrides.")
+    max_cost: float | None = Field(description="The budget per run that would apply.")
+    files: list[FileEstimate]
+    calls: int
+    max_calls: int
+    input_tokens: int
+    output_tokens: int
+    expected_usd: float | None
+    max_usd: float | None
 
 
 class BatchRequest(BaseModel):
@@ -174,6 +217,9 @@ class BatchRequest(BaseModel):
         description="false improves the existing tests directly; files without a test file are then skipped.",
     )
     runner: Runner | None = Field(default=None, description="How to run Vitest and Stryker.")
+    max_cost: float | None = Field(
+        default=None, gt=0, le=10_000, description="Budget in USD per run; defaults to the configured max_cost."
+    )
 
 
 class BatchDetail(BatchReport):
@@ -202,6 +248,7 @@ class RunSummary(BaseModel):
     tests_after: int | None
     active: bool
     batch_id: str | None = Field(default=None, description="The multi-file run this run belongs to, if any.")
+    cost_usd: float | None = Field(default=None, description="What the model calls cost, when the price is known.")
 
 
 class LiveState(BaseModel):

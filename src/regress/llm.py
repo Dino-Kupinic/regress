@@ -46,8 +46,9 @@ class TestFileProposal(BaseModel):
 @dataclass
 class Completion:
     proposal: TestFileProposal
-    input_tokens: int = 0
+    input_tokens: int = 0  # including cached_input_tokens
     output_tokens: int = 0
+    cached_input_tokens: int = 0
 
 
 class LLM(Protocol):
@@ -274,10 +275,12 @@ class OpenAILLM(StreamingLLM):
         if parsed is None:
             raise LLMError(f"The model returned no usable test file ({response.status}).")
         usage = response.usage
+        details = getattr(usage, "input_tokens_details", None)
         return Completion(
             proposal=parsed,
             input_tokens=usage.input_tokens if usage else 0,
             output_tokens=usage.output_tokens if usage else 0,
+            cached_input_tokens=(getattr(details, "cached_tokens", 0) or 0) if usage else 0,
         )
 
 
@@ -401,10 +404,12 @@ class OpenAICompatibleLLM(StreamingLLM):
         if message is None or message.parsed is None:
             raise LLMError("The model returned no usable test file.")
         usage = completion.usage
+        details = getattr(usage, "prompt_tokens_details", None)
         return Completion(
             proposal=message.parsed,
             input_tokens=usage.prompt_tokens if usage else 0,
             output_tokens=usage.completion_tokens if usage else 0,
+            cached_input_tokens=(getattr(details, "cached_tokens", 0) or 0) if usage else 0,
         )
 
 

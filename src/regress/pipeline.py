@@ -7,11 +7,12 @@ from datetime import datetime
 from pathlib import Path
 
 from regress.changes import format_ranges
-from regress.errors import CandidateRejected, RegressError
+from regress.errors import BudgetReached, CandidateRejected, RegressError
 from regress.files import atomic_write_text
 from regress.llm import LLM, Completion
 from regress.models import RunReport, Stage, StageKind, TestRunResult, TestStatus
 from regress.mutants import describe_mutant, select_mutants
+from regress.pricing import REASONING_FACTOR, Price, cost, format_usd, next_call_cost, token_factor, tokens
 from regress.project import Project
 from regress.prompts import INSTRUCTIONS, PromptContext, generate_prompt, improve_prompt, repair_prompt
 from regress.store import RunStore
@@ -30,6 +31,8 @@ class RunOptions:
     generate: bool = True
     vitest_timeout: float = 300
     stryker_timeout: float = 1800
+    price: Price | None = None  # what the model costs; None when unknown (then no cost is reported)
+    max_cost: float | None = None  # USD; needs a price
 
 
 @dataclass
@@ -65,6 +68,7 @@ class Pipeline:
         self.source_lines = project.source.read_text().splitlines(keepends=True)
         self._mutation_runs = 0
         self._llm_calls = 0
+        self._last_output_tokens: int | None = None
 
     def run(self, run_dir: Path | None = None) -> RunReport:
         """Run the whole loop. `run_dir` is an empty directory created in advance, e.g. to hand out the ID early."""
@@ -82,6 +86,9 @@ class Pipeline:
             provider=getattr(self.llm, "provider", "openai"),
             mutate_lines=list(self.project.mutate_lines),
             batch_id=self.batch_id,
+            price=self.options.price,
+            max_cost=self.options.max_cost,
+            cost_usd=0.0 if self.options.price else None,
         )
         kept: Version | None = None
         try:
@@ -119,9 +126,9 @@ class Pipeline:
     def _run(self) -> Version:
         baseline = self._baseline()
         if self.options.generate:
-            current = self._propose(
-                "generated", "Generated tests", generate_prompt(self.ctx, baseline.content), baseline
-            )
+            prompt = generate_prompt(self.ctx, baseline.content)
+            self._check_budget(prompt)
+            current = self._propose("generated", "Generated tests", prompt, baseline)
             self.reporter.generated(baseline.stage, current.stage)
             self._mutate(current)
         else:
@@ -140,12 +147,17 @@ class Pipeline:
             if not mutants:
                 self.reporter.note("No undetected mutants left to improve on.")
                 break
-            self.reporter.improving(round_number, len(mutants), len(current.stage.mutation.undetected))
             descriptions = [describe_mutant(m, self.source_lines, self.project.source_rel) for m in mutants]
             prompt = improve_prompt(self.ctx, current.content or "", current.stage.test_count, descriptions)
             label = "Improved tests" if self.options.rounds == 1 else f"Improved tests (round {round_number})"
             try:
+                self._check_budget(prompt)
+                self.reporter.improving(round_number, len(mutants), len(current.stage.mutation.undetected))
                 improved = self._propose("improved", label, prompt, current, targeted=[m.id for m in mutants])
+            except BudgetReached as error:
+                self.report.stop_reason = str(error)
+                self.reporter.warn(f"{error} Keeping the best tests so far.")
+                break
             except CandidateRejected as error:
                 self.reporter.warn(f"{error} Keeping the previous tests.")
                 self.report.stages.append(Stage(kind="improved", label=label, rejected=True, problems=error.problems))
@@ -158,6 +170,31 @@ class Pipeline:
             else:
                 self.reporter.warn("The mutation score went down; keeping the previous tests.")
         return current
+
+    def _check_budget(self, prompt: str) -> None:
+        """Refuse a model call that would take the run past max_cost, judged before it is made.
+
+        Its input is the prompt as written; its output is taken to be as long as the previous call's,
+        or, for the first call, what the estimate expects for this file.
+        """
+        price, limit = self.options.price, self.options.max_cost
+        if price is None or limit is None:
+            return
+        spent = self.report.cost_usd or 0.0
+        factor = token_factor(self.llm.model)
+        output = self._last_output_tokens or self._first_output_estimate(factor)
+        upcoming = next_call_cost(price, INSTRUCTIONS + prompt, output, factor)
+        if spent + upcoming > limit:
+            raise BudgetReached(
+                f"The next model call would take the run past its budget of {format_usd(limit)} "
+                f"({format_usd(spent)} spent, about {format_usd(upcoming)} more)."
+            )
+
+    def _first_output_estimate(self, factor: float) -> int:
+        code = self.ctx.source + "".join(text for _, text in self.ctx.related)
+        tests = self.workspace.original_tests
+        written = max(int(tokens(tests, factor) * 1.5) if tests else 0, int(tokens(code, factor) * 1.5), 1500)
+        return int(written * REASONING_FACTOR)
 
     def _baseline(self) -> Version:
         stage = Stage(kind="baseline", label="Existing tests")
@@ -199,12 +236,24 @@ class Pipeline:
         verb = "Generating tests" if kind == "generated" else "Improving tests"
         llm_seconds = 0.0
         for attempt in range(1, attempts + 1):
+            if attempt > 1:
+                try:
+                    self._check_budget(prompt)
+                except BudgetReached:
+                    self.workspace.write_tests(previous.content)
+                    raise
             suffix = f" (attempt {attempt}/{attempts})" if attempt > 1 else ""
             started = time.monotonic()
             with self.reporter.activity(f"{verb} with {self.llm.model}{suffix}") as status:
                 completion = self.llm.propose(INSTRUCTIONS, prompt, on_status=status, on_warning=self.reporter.warn)
             llm_seconds += time.monotonic() - started
-            self.report.usage.add(completion.input_tokens, completion.output_tokens)
+            self.report.usage.add(completion.input_tokens, completion.output_tokens, completion.cached_input_tokens)
+            self._last_output_tokens = completion.output_tokens
+            if self.options.price is not None:
+                usage = self.report.usage
+                self.report.cost_usd = cost(
+                    self.options.price, usage.input_tokens, usage.output_tokens, usage.cached_input_tokens
+                )
             content = clean_test_file(completion.proposal.test_file)
             name = self._log_llm(kind, attempt, prompt, completion)
             with self.reporter.activity("Checking the new tests against the original code"):

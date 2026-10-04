@@ -11,6 +11,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, ValidationError
 
 from regress.errors import ProjectError
+from regress.pricing import Price
 from regress.providers import PROVIDERS, ProviderName, split_model
 
 CONFIG_FILE = "regress.toml"
@@ -34,6 +35,11 @@ runner = "auto"       # how to run Vitest and Stryker: "bun", "npx", or "auto"
 # llm_max_duration = 1800  # total seconds allowed for one proposal, including retries
 # llm_max_output_tokens = 32768  # output budget, including model reasoning
 # fail_under = 80     # `regress check` fails below this combined mutation score (percent)
+# max_cost = 0.50     # USD per run: Regress stops before a model call would go past it
+# [prices."my-model"] # USD per million tokens, for models Regress has no price for (or newer prices)
+# input = 1.0
+# output = 4.0
+# cached_input = 0.1
 """
 
 USER_CONFIG_HEADER = "# Your personal Regress defaults. Manage them with `regress models`.\n"
@@ -64,6 +70,9 @@ class Settings(BaseModel):
     vitest_timeout: int = Field(default=300, ge=10, le=14400)
     stryker_timeout: int = Field(default=1800, ge=30, le=86400)
     fail_under: float | None = Field(default=None, ge=0, le=100)  # `regress check` gate, in percent
+    max_cost: float | None = Field(default=None, gt=0, le=10_000)  # USD per run: no model call goes past it
+    # USD per million tokens, by model ID, over the bundled list: {"gpt-6-luna" = {input = 0.1, output = 0.5}}
+    prices: dict[str, Price] = Field(default_factory=dict, max_length=500)
 
     _model_source: ModelSource = PrivateAttr(default="built-in default")
 
@@ -198,6 +207,11 @@ def _validate(data: dict[str, object], where: str) -> Settings:
 
 
 def _toml_value(value: object) -> str:
+    if isinstance(value, BaseModel):
+        value = value.model_dump(exclude_none=True)
+    if isinstance(value, dict):  # an inline table, e.g. prices = { "gpt-6-luna" = { input = 0.1 } }
+        items = ", ".join(f"{json.dumps(str(k))} = {_toml_value(v)}" for k, v in value.items())
+        return "{ " + items + " }" if items else "{}"
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, int | float):

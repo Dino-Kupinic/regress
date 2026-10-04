@@ -22,6 +22,10 @@ class LLMError(RegressError):
     """The model call failed or returned something unusable."""
 
 
+class BudgetReached(RegressError):
+    """The next model call would take the run past its max_cost."""
+
+
 class CandidateRejected(RegressError):
     """The model could not produce a valid test file within the allowed attempts."""
 

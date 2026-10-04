@@ -18,6 +18,7 @@ from rich.text import Text
 from regress.changes import format_ranges
 from regress.models import MutantStatus, MutationRun, RunReport, Stage
 from regress.mutants import short_description
+from regress.pricing import format_usd, price_for
 
 if TYPE_CHECKING:
     from regress.batch import BatchReport, FileResult
@@ -253,6 +254,10 @@ class ConsoleReporter(Reporter):
         kept = report.kept
         if baseline and baseline.mutation and kept and kept.score is not None and kept is not baseline:
             self._row("vs existing tests", format_delta(kept.score - baseline.mutation.score), "bold")
+        if report.usage.calls:
+            self.console.print(f"[dim]{escape(_usage_line(report))}[/]")
+        if report.stop_reason:
+            self.console.print(f"[yellow]! Stopped early: {escape(report.stop_reason)}[/]")
         self.console.print()
         if kept is not None:
             self.console.print(f"[green]✓[/] Kept {kept.label.lower()} in [bold]{escape(report.test_file)}[/]")
@@ -316,11 +321,10 @@ def render_report(report: RunReport, run_dir: Path, console: Console, show_mutan
     delta = report.improvement
     if delta is not None and report.kept is not report.reference and report.reference is not None:
         console.print(f"\n[bold]Improvement[/] {format_delta(delta)} [dim](vs {report.reference.label.lower()})[/]")
-    usage = report.usage
-    if usage.calls:
-        console.print(
-            f"[dim]LLM: {usage.calls} calls · {usage.input_tokens:,} input / {usage.output_tokens:,} output tokens[/]"
-        )
+    if report.usage.calls:
+        console.print(f"[dim]{escape(_usage_line(report))}[/]")
+    if report.stop_reason:
+        console.print(f"[yellow]Stopped early: {escape(report.stop_reason)}[/]")
 
     kept = report.kept
     if kept and kept.mutation and show_mutants:
@@ -442,6 +446,20 @@ def render_check(report: CheckReport, directory: Path, console: Console, show_mu
     console.print(f"[dim]Saved to {escape(_display_path(directory))}[/]")
 
 
+def _usage_line(report: RunReport) -> str:
+    """`Cost $0.0042 · 3 model calls · 12,345 input / 6,789 output tokens`, cost only when it is known."""
+    usage = report.usage
+    calls = f"{usage.calls} model {'call' if usage.calls == 1 else 'calls'}"
+    tokens = f"{usage.input_tokens:,} input / {usage.output_tokens:,} output tokens"
+    if usage.cached_input_tokens:
+        tokens += f" ({usage.cached_input_tokens:,} cached)"
+    parts = [calls, tokens]
+    if report.cost_usd is not None:
+        budget = f" of {format_usd(report.max_cost)}" if report.max_cost is not None else ""
+        parts.insert(0, f"Cost {format_usd(report.cost_usd)}{budget}")
+    return " · ".join(parts)
+
+
 def render_run_list(reports: list[tuple[RunReport, Path]], console: Console) -> None:
     table = Table(box=None, pad_edge=False, header_style="dim")
     for column in ("Run", "Source", "Status", "First", "Kept", "Δ"):
@@ -476,6 +494,7 @@ def choose_model(
     default: str | None,
     ask: Callable[..., str] = Prompt.ask,
     confirm: Callable[..., bool] = Confirm.ask,
+    prices: dict | None = None,
 ) -> tuple[str, bool]:
     """Ask which model to use for this run. Returns (model, remember)."""
     shown = [m.id for m in catalog.latest(PICKER_SIZE)]
@@ -496,7 +515,8 @@ def choose_model(
             tags.append(f"retiring {info.shutdown_date}")
         created = info.created_date if info else ""
         tag_text = f" [cyan]{', '.join(tags)}[/]" if tags else ""
-        console.print(f"  [bold]{number:>2}[/]  {escape(model_id):<24}[dim]{created:<11}[/]{tag_text}")
+        rate = _rate(catalog.provider, model_id, prices)
+        console.print(f"  [bold]{number:>2}[/]  {escape(model_id):<24}[dim]{created:<11}{rate:<16}[/]{tag_text}")
 
     while True:
         answer = ask("Model [dim](number or name)[/]", default=default, console=console).strip()
@@ -517,6 +537,12 @@ def choose_model(
     return choice, remember
 
 
+def _rate(provider: str, model_id: str, prices: dict | None = None) -> str:
+    """`$0.10/$0.50` per million input/output tokens, or nothing when the price isn't known."""
+    price = price_for(provider, model_id, prices)
+    return f"${price.input:g}/${price.output:g}" if price else ""
+
+
 def render_models(
     console: Console, catalog: Catalog, settings: Settings, config_path: Path, show_all: bool = False
 ) -> None:
@@ -531,7 +557,8 @@ def render_models(
         if info.retiring:
             tags.append(f"retiring {info.shutdown_date}")
         tag_text = f" [cyan]{', '.join(tags)}[/]" if tags else ""
-        console.print(f"  {escape(info.id):<26}[dim]{info.created_date:<11}[/]{tag_text}")
+        rate = _rate(settings.provider, info.id, settings.prices)
+        console.print(f"  {escape(info.id):<26}[dim]{info.created_date:<11}{rate:<16}[/]{tag_text}")
     hidden = len(catalog.latest(None, include_snapshots=True)) - len(models)
     if hidden > 0:
         console.print(f"  [dim]...{hidden} more, including dated snapshots (--all)[/]")
@@ -547,4 +574,7 @@ def render_models(
     if settings.model is not None and catalog.verified and not catalog.has(settings.model):
         console.print("[yellow]  ! not in the list of models available to your API key[/]")
     console.print(f"Ask before each run  [bold]{'yes' if settings.ask_model else 'no'}[/]")
+    console.print(
+        "[dim]Prices are USD per million input/output tokens; override them with [prices] in regress.toml.[/]"
+    )
     console.print("\n[dim]Change with `regress models --set <model>` and `regress models --ask/--no-ask`.[/]")

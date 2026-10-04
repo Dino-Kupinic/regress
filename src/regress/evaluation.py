@@ -23,6 +23,7 @@ from regress.files import atomic_write_text
 from regress.llm import LLM
 from regress.models import Stage
 from regress.pipeline import Pipeline, RunOptions
+from regress.pricing import format_usd
 from regress.project import Project, Runner, load_project
 from regress.store import RunStore, _check_artifact_path, regress_dir
 from regress.stryker import run_stryker
@@ -82,6 +83,8 @@ class ModuleResult(BaseModel):
     error: str | None = None
     note: str | None = None  # how a result was counted, e.g. when the model never wrote valid tests
     run_id: str | None = None
+    cost_usd: float | None = None  # what the module's run spent on the model, when its price is known
+    killed: int | None = None  # mutants the Regress (kept) tests detected, for cost per mutant
 
 
 class StageTotal(BaseModel):
@@ -91,6 +94,12 @@ class StageTotal(BaseModel):
     score: float | None = None  # mean mutation score
     caught: int = 0
     bugs_total: int = 0
+
+
+class CostTotal(BaseModel):
+    usd: float
+    per_mutant_killed: float | None
+    per_bug_caught: float | None
 
 
 class EvalResult(BaseModel):
@@ -132,6 +141,23 @@ class EvalResult(BaseModel):
                 )
             )
         return totals
+
+    @computed_field
+    @property
+    def cost(self) -> CostTotal | None:
+        """Spend on the counted modules, and what it bought: per mutant the kept tests detect, per bug caught."""
+        counted = [m for m in self.modules if m.module in set(self.counted_modules)]
+        if self.mode != "regress" or not counted or any(m.cost_usd is None for m in counted):
+            return None
+        spent = sum(m.cost_usd or 0 for m in counted)
+        killed = sum(m.killed or 0 for m in counted)
+        regress = next((t for t in self.totals if t.label == "Regress"), None)
+        caught = regress.caught if regress else 0
+        return CostTotal(
+            usd=spent,
+            per_mutant_killed=spent / killed if killed else None,
+            per_bug_caught=spent / caught if caught else None,
+        )
 
     @property
     def totals_label(self) -> str:
@@ -266,6 +292,9 @@ def _evaluate_module(
 
         report, run_dir = store.load()
         module.run_id = report.id
+        module.cost_usd = report.cost_usd
+        kept = report.kept
+        module.killed = kept.mutation.killed + kept.mutation.timeout if kept and kept.mutation else 0
         try:
             existing = _hidden_bugs_for_stage(project, suite, "Existing tests", report.stage("baseline"), run_dir)
             module.stages.append(existing)
@@ -354,8 +383,10 @@ def evaluate_oracles(
 
 def to_markdown(result: EvalResult) -> str:
     labels = result.stage_labels
-    header = "| Module | " + " | ".join(f"{label} score | {label} bugs" for label in labels) + " |"
-    divider = "|---|" + "---:|---:|" * len(labels)
+    priced = result.mode == "regress" and any(m.cost_usd is not None for m in result.modules)
+    header = "| Module | " + " | ".join(f"{label} score | {label} bugs" for label in labels)
+    header += " | Cost |" if priced else " |"
+    divider = "|---|" + "---:|---:|" * len(labels) + ("---:|" if priced else "")
     rows = []
     for module in result.modules:
         cells = []
@@ -368,12 +399,22 @@ def to_markdown(result: EvalResult) -> str:
         # Errors can span lines or contain pipes, either of which would break the table row.
         error = " ".join((module.error or "").split()).replace("|", "\\|")
         suffix = f" ⚠ {error}" if error else ""
+        if priced:
+            cells.append(format_usd(module.cost_usd))
         rows.append(f"| {module.module}{suffix} | " + " | ".join(cells) + " |")
     totals = []
     for total in result.totals:
         totals += [f"**{_pct(total.score)}**", f"**{total.caught}/{total.bugs_total}**"]
+    spent = result.cost
+    if priced:
+        totals.append(f"**{format_usd(spent.usd)}**" if spent else "—")
     rows.append(f"| **{result.totals_label}** | " + " | ".join(totals) + " |")
     notes = [f"- **{m.module}:** {m.note}" for m in result.modules if m.note]
+    if spent:
+        notes.append(
+            f"- Cost per mutant the Regress tests detect: {format_usd(spent.per_mutant_killed)}; "
+            f"per hidden bug caught: {format_usd(spent.per_bug_caught)}."
+        )
     if len(result.counted_modules) < len(result.modules):
         notes.append(f"- {COUNTING_NOTE}")
     title = f"# Regress evaluation ({result.mode})\n\n"
