@@ -3,7 +3,7 @@ title: Your first run
 description: Generate regression tests, inspect mutation feedback, and review the tests Regress keeps.
 ---
 
-Regress improves tests for one JavaScript or TypeScript source file at a time. It asks an OpenAI model to extend a test file, validates the result with Vitest, and uses surviving StrykerJS mutations to guide another round of test writing.
+Regress improves tests for one JavaScript or TypeScript source file at a time. It asks a model (OpenAI, Anthropic, or any OpenAI-compatible server; see [Model providers](/docs/reference/providers)) to extend a test file, validates the result with Vitest, and uses surviving StrykerJS mutations to guide another round of test writing.
 
 The CLI and web app use the same engine. A successful run writes its selected tests into your project and saves the report and intermediate files under `.regress/`.
 

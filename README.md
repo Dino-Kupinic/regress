@@ -28,7 +28,7 @@ bun run dev   # http://127.0.0.1:3000
 - Node.js 22 and [Bun](https://bun.sh) 1.3.13 (CI and the production image pin these). Bun runs Vitest and Stryker; `runner = "auto"` falls back to `npx` when Bun is not on `PATH`
 - Linux or macOS for `regress serve`. Project locking uses `fcntl`
 - A TypeScript/JavaScript project with **Vitest 2–4**, `@stryker-mutator/core` and `@stryker-mutator/vitest-runner` (`regress init` installs them)
-- An OpenAI API key in `OPENAI_API_KEY` (a `.env` file works too)
+- A model: an OpenAI key in `OPENAI_API_KEY` (the default), an Anthropic key in `ANTHROPIC_API_KEY` for Claude models, or a local OpenAI-compatible server such as Ollama. A `.env` file works too; see [Model providers](#model-providers)
 
 > **Vitest 5 is not supported yet.** Stryker's Vitest runner (10.x) never activates mutants under Vitest 5, so every mutant silently "survives". Regress detects this and refuses to run. `regress init` offers to install `vitest@^4`.
 
@@ -98,7 +98,7 @@ Useful flags for `regress run`:
 | `--rounds N` | Improvement rounds after the first mutation run (default 1). |
 | `--baseline` | Also mutation-test the existing tests first, for a before/after against them. |
 | `--no-generate` | Skip the one-shot round and improve the existing tests directly. |
-| `--model/-m` | OpenAI model for this run; skips the model question. |
+| `--model/-m` | Model for this run, or `provider:model` (e.g. `anthropic:claude-sonnet-5-5`); skips the model question. |
 | `--yes/-y` | Ask nothing; use the default model. |
 | `--verbose/-v` | Show full validation errors and the model's summaries. |
 
@@ -123,6 +123,28 @@ Before a run over several files, Regress lists them and asks to go on, since eac
 ### Checking in CI
 
 `regress check` mutation-tests the existing tests without calling the model, so it costs nothing and needs no API key. It takes the same paths and `--changed` as `regress run`. `--fail-under 80` (or `fail_under` in `regress.toml`) exits with code 1 below a combined score of 80%, or when a checked file has no tests; existing tests that fail always do. `--json` prints the report, and `--markdown comment.md` writes a pull request comment with each file's score and the surviving mutants as diffs. Results are saved to `.regress/checks/<id>/`. The [CI guide](docs/content/docs/using/ci.mdx) has a GitHub Actions workflow that keeps one such comment up to date.
+
+### Model providers
+
+OpenAI is the default. Set `provider` in `regress.toml` (or `REGRESS_PROVIDER`), or name the provider in the model ID:
+
+```toml
+provider = "anthropic"            # ANTHROPIC_API_KEY; default model claude-opus-5-5
+```
+
+```toml
+provider = "openai-compatible"    # Ollama, vLLM, OpenRouter, ...
+base_url = "http://localhost:11434/v1"
+model = "qwen3-coder:30b"
+# api_key_env = "OPENROUTER_API_KEY"   # if the server needs a key
+```
+
+```bash
+regress run src/cart.ts --model anthropic:claude-sonnet-5-5
+regress models --provider anthropic
+```
+
+Claude models stream with adaptive thinking (summaries in the spinner) and effort `high` unless `reasoning_effort` says otherwise. On the models that support it, a declined request is retried on Anthropic's recommended fallback model, server-side. OpenAI-compatible servers get Chat Completions with a JSON-schema response format, so the model must support structured output. `base_url` and `api_key_env` can't be changed through the HTTP API. The [providers guide](docs/content/docs/reference/providers.mdx) has the details.
 
 ### Choosing a model
 
@@ -287,7 +309,7 @@ The API defaults to local access. For hosting, the bundled [Nginx deployment](do
 
 - It listens on 127.0.0.1 and answers only requests addressed to a local host name, which stops DNS rebinding.
 - Browsers can call it only from allowed origins: `http://localhost:5173` and `http://127.0.0.1:5173` by default. `--origin` is repeatable and replaces that pair. Requests that change something and come from another origin get `403`, including simple requests that skip the CORS preflight. `GET`, `HEAD`, and `OPTIONS` pass that check, as do clients that send no `Origin` header, such as `curl`.
-- `OPENAI_API_KEY` stays on the server. Only JavaScript and TypeScript files outside hidden and dependency folders can be read, so `.env` is never served.
+- API keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) stay on the server, and `base_url` / `api_key_env` can't be changed over HTTP. Only JavaScript and TypeScript files outside hidden and dependency folders can be read, so `.env` is never served.
 - Binding beyond loopback requires `--allow-remote`. Keep the API port private and expose only the authenticated proxy.
 
 API runs, evaluations and dependency installs share one exclusive project reservation. A second API server does not take the project while the first still holds it. It answers readiness checks during that wait, then exits if the lock is still held after 30 seconds. Do not run CLI mutation jobs against a project currently served by the API. The backend's process supervision and project locking require Linux or macOS.
@@ -359,7 +381,8 @@ Code map (`src/regress/`):
 | `project.py` | Project, toolchain and test-file discovery |
 | `vitest.py`, `stryker.py` | Tool adapters |
 | `validate.py` | Candidate checks |
-| `mutants.py`, `prompts.py`, `llm.py` | Mutant selection, prompts, OpenAI |
+| `mutants.py`, `prompts.py` | Mutant selection, prompts |
+| `llm.py`, `llm_anthropic.py`, `providers.py` | The streaming model clients (OpenAI, OpenAI-compatible, Anthropic) and which provider and key to use |
 | `catalog.py` | Available models: fetch, cache, filter |
 | `config.py` | Layered settings and the user config |
 | `ui.py` | Terminal output |

@@ -37,7 +37,7 @@ The default run generates tests and performs one improvement round. Use `--basel
 - Python 3.13 or newer and uv for the engine.
 - Node.js and Bun for the JavaScript tools and dashboard.
 - A project with Vitest 2–4 and the Stryker Vitest runner. `regress init` can install missing packages.
-- An `OPENAI_API_KEY` available to the Python process for model-backed runs.
+- An API key for the model provider, available to the Python process for model-backed runs: `OPENAI_API_KEY` by default, `ANTHROPIC_API_KEY` for Claude models, or none for a local server. See [Model providers](/docs/reference/providers).
 
 Vitest 5 is currently rejected by the application. See [installation](/docs/getting-started/installation) for the complete setup and [configuration](/docs/reference/configuration) for model selection, budgets, and timeouts.
 
