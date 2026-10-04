@@ -50,9 +50,9 @@ import {
 import { Skeleton } from "~/components/ui/skeleton";
 import { Spinner } from "~/components/ui/spinner";
 import { Switch } from "~/components/ui/switch";
-import { api, type ProjectInfo } from "~/lib/api";
+import { api, type CostEstimate, type ProjectInfo } from "~/lib/api";
 import { copyToClipboard } from "~/lib/clipboard";
-import { fileName } from "~/lib/utils";
+import { fileName, usd } from "~/lib/utils";
 
 type DrawerContext = { open: (source?: string) => void; opened: boolean };
 const Context = createContext<DrawerContext>({
@@ -79,6 +79,7 @@ export function NewRunProvider({
   const [rounds, setRounds] = useState(1);
   const [baseline, setBaseline] = useState(false);
   const [generate, setGenerate] = useState(true);
+  const [budget, setBudget] = useState("");
   const [error, setError] = useState("");
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -108,6 +109,22 @@ export function NewRunProvider({
     (item) => item.data?.test_file_exists,
   ).length;
   const hasTests = withTests > 0;
+  const maxCost = budget.trim() === "" ? undefined : Number(budget);
+  const budgetInvalid =
+    maxCost !== undefined && !(Number.isFinite(maxCost) && maxCost > 0);
+  const estimate = useQuery({
+    queryKey: ["estimate", selected, model, rounds, generate || !hasTests],
+    queryFn: () =>
+      api.estimate({
+        sources: selected,
+        model: model === DEFAULT_MODEL ? undefined : model,
+        rounds,
+        generate: generate || !hasTests,
+      }),
+    enabled: opened && selected.length > 0 && loaded && !failed.length,
+    staleTime: 30_000,
+    placeholderData: (previous) => previous,
+  });
   const run = useMutation({
     mutationFn: () => {
       const options = {
@@ -115,6 +132,7 @@ export function NewRunProvider({
         rounds,
         baseline: baseline && hasTests,
         generate: generate || !hasTests,
+        max_cost: maxCost,
       };
       return single
         ? api.startRun({ source: selected[0], ...options }).then((result) => ({
@@ -154,6 +172,7 @@ export function NewRunProvider({
     setBaseline(false);
     setGenerate(true);
     setRounds(1);
+    setBudget("");
     setOpened(true);
   };
   const matches = matchSources(sources.data ?? [], search);
@@ -185,6 +204,7 @@ export function NewRunProvider({
     baseline && hasTests && "--baseline",
     !generate && hasTests && "--no-generate",
     `--rounds ${rounds}`,
+    maxCost !== undefined && !budgetInvalid && `--max-cost ${maxCost}`,
     "--yes",
   ]
     .filter(Boolean)
@@ -199,7 +219,9 @@ export function NewRunProvider({
           ? "Choose source files"
           : failed.length
             ? `${failed.length === 1 ? failed[0] : `${failed.length} files`} can't be run`
-            : null;
+            : budgetInvalid
+              ? "The budget must be a positive amount"
+              : null;
   const optionNote =
     !single && selected.length && hasTests && withTests < selected.length
       ? `${withTests} of ${selected.length} files have tests`
@@ -393,6 +415,32 @@ export function NewRunProvider({
                     />
                   </Field>
                 </div>
+                <div className="grid grid-cols-[1fr_9rem] items-start gap-3">
+                  <Field>
+                    <FieldLabel>Estimated cost</FieldLabel>
+                    <EstimateLine
+                      estimate={estimate.data}
+                      loading={estimate.isFetching && !estimate.data}
+                      error={estimate.error?.message}
+                      files={selected.length}
+                    />
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="run-budget">Budget (USD)</FieldLabel>
+                    <Input
+                      id="run-budget"
+                      inputMode="decimal"
+                      placeholder={
+                        estimate.data?.max_cost != null
+                          ? String(estimate.data.max_cost)
+                          : "None"
+                      }
+                      aria-invalid={budgetInvalid || undefined}
+                      value={budget}
+                      onChange={(event) => setBudget(event.target.value)}
+                    />
+                  </Field>
+                </div>
                 <Field orientation="horizontal" data-disabled={!hasTests}>
                   <FieldContent>
                     <FieldLabel htmlFor="run-baseline">
@@ -531,6 +579,46 @@ export function NewRunProvider({
         </SheetContent>
       </Sheet>
     </Context.Provider>
+  );
+}
+
+function EstimateLine({
+  estimate,
+  loading,
+  error,
+  files,
+}: {
+  estimate?: CostEstimate;
+  loading: boolean;
+  error?: string;
+  files: number;
+}) {
+  if (!files)
+    return (
+      <FieldDescription>Choose files to see what a run costs.</FieldDescription>
+    );
+  if (error) return <FieldDescription>{error}</FieldDescription>;
+  if (loading || !estimate)
+    return <FieldDescription className="shimmer">Estimating</FieldDescription>;
+  if (estimate.expected_usd == null || !estimate.price)
+    return (
+      <FieldDescription>
+        About {estimate.input_tokens.toLocaleString()} input and{" "}
+        {estimate.output_tokens.toLocaleString()} output tokens. No price is
+        known for <span className="font-mono">{estimate.model}</span>.
+      </FieldDescription>
+    );
+  return (
+    <FieldDescription>
+      <span className="text-foreground tabular-nums">
+        About {usd(estimate.expected_usd)}
+      </span>
+      , at most {usd(estimate.max_usd)}
+      {files > 1 && ` for ${files} files`}.{" "}
+      <span className="font-mono">{estimate.model}</span> costs $
+      {estimate.price.input}/${estimate.price.output} per 1M tokens (prices of{" "}
+      {estimate.prices_as_of}).
+    </FieldDescription>
   );
 }
 

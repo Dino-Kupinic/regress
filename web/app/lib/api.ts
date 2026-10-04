@@ -48,7 +48,8 @@ export type Settings = {
   runner: "auto" | "bun" | "npx";
   llm_timeout: number;
   vitest_timeout: number;
-  stryker_timeout: number;
+  stryker_timeout: number /** Budget in USD per run; null for none. */;
+  max_cost: number | null;
 };
 export type SettingsInfo = {
   effective: Settings;
@@ -92,6 +93,35 @@ export type RunSummary = {
   active: boolean;
   /** The multi-file run this run belongs to, if any. */
   batch_id: string | null;
+  cost_usd: number | null;
+};
+/** USD per million tokens. */
+export type Price = {
+  input: number;
+  output: number;
+  cached_input: number | null;
+};
+export type CostEstimate = {
+  model: string;
+  provider: Provider;
+  price: Price | null;
+  prices_as_of: string;
+  max_cost: number | null;
+  files: {
+    source_file: string;
+    input_tokens: number;
+    output_tokens: number;
+    expected_usd: number | null;
+    max_usd: number | null;
+  }[];
+  calls: number;
+  max_calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  /** Each stage's first proposal accepted. */
+  expected_usd: number | null;
+  /** Every repair attempt used, every response at the output budget. */
+  max_usd: number | null;
 };
 export type Mutant = {
   id: string;
@@ -150,7 +180,18 @@ export type RunReport = {
   error: string | null;
   stages: Stage[];
   kept_stage: string | null;
-  usage: { input_tokens: number; output_tokens: number; calls: number };
+  usage: {
+    input_tokens: number;
+    output_tokens: number;
+    cached_input_tokens: number;
+    calls: number;
+  };
+  /** USD at `price`; null when the model's price isn't known. */
+  cost_usd: number | null;
+  price: Price | null;
+  max_cost: number | null;
+  /** Why the run stopped before its last round, e.g. the budget. */
+  stop_reason: string | null;
   duration_seconds: number;
 };
 export type LiveState = {
@@ -182,6 +223,8 @@ export type RunRequest = {
   baseline?: boolean;
   generate?: boolean;
   runner?: Settings["runner"];
+  /** Budget in USD per run; defaults to the configured max_cost. */
+  max_cost?: number;
 };
 export type BatchRequest = Omit<RunRequest, "source" | "test"> & {
   sources: string[];
@@ -201,6 +244,7 @@ export type BatchFile = {
   tests_kept: number | null;
   score_first: number | null;
   score_kept: number | null;
+  cost_usd: number | null;
 };
 export type BatchDetail = {
   id: string;
@@ -266,8 +310,16 @@ export type EvalResult = {
     error: string | null;
     note: string | null;
     run_id: string | null;
+    cost_usd?: number | null;
+    killed?: number | null;
   }[];
   output_dir: string | null;
+  /** Spend on the counted modules, and what it bought; null without prices or in oracle mode. */
+  cost?: {
+    usd: number;
+    per_mutant_killed: number | null;
+    per_bug_caught: number | null;
+  } | null;
   // Totals count only these modules, the ones with a result in every column.
   counted_modules: string[];
   totals: EvalTotal[];
@@ -397,6 +449,18 @@ export const api = {
   evaluations: () => request<EvalResult[]>("/evaluations"),
   evaluationSuites: () => request<BugSuite[]>("/evaluations/suites"),
   evaluationJob: () => request<EvalJob>("/evaluations/job"),
+  estimate: (payload: {
+    sources: string[];
+    model?: string;
+    rounds?: number;
+    generate?: boolean;
+    max_cost?: number;
+  }) =>
+    request<CostEstimate>("/estimate", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  evaluationEstimate: () => request<CostEstimate>("/evaluations/estimate"),
   startEvaluation: (mode: "oracle" | "full") =>
     request<EvalJob>("/evaluations", {
       method: "POST",

@@ -4,6 +4,13 @@ export function percent(value: number | null | undefined) {
   return value == null ? "—" : `${Math.round(value)}%`;
 }
 
+/** $0.0031, $0.42, $12.30: enough digits to tell small runs apart (as the CLI shows them). */
+export function usd(value: number | null | undefined) {
+  if (value == null) return "—";
+  if (value === 0) return "$0.00";
+  return value < 0.01 ? `$${value.toFixed(4)}` : `$${value.toFixed(2)}`;
+}
+
 export function duration(seconds: number | null | undefined) {
   if (seconds == null) return "—";
   const minutes = Math.floor(seconds / 60);

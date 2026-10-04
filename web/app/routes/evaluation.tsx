@@ -55,7 +55,7 @@ import {
   TableRow,
 } from "~/components/ui/table";
 import { api, type EvalJob, type EvalResult } from "~/lib/api";
-import { cn, dateTime, pageTitle, percent } from "~/lib/utils";
+import { cn, dateTime, pageTitle, percent, usd } from "~/lib/utils";
 
 export const meta: MetaFunction = () => [{ title: pageTitle("Evaluation") }];
 
@@ -120,6 +120,12 @@ export default function Evaluation() {
     .data?.active_run;
   const [oracleOnly, setOracleOnly] = useState(true);
   const [confirming, setConfirming] = useState(false);
+  const estimate = useQuery({
+    queryKey: ["evaluation-estimate"],
+    queryFn: api.evaluationEstimate,
+    enabled: confirming,
+    staleTime: 30_000,
+  });
   const [selected, setSelected] = useState(suites[0]?.name ?? "");
   // Which result is on screen; null follows the newest one.
   const [viewing, setViewing] = useState<string | null>(null);
@@ -269,6 +275,13 @@ export default function Evaluation() {
           );
         })}
       </div>
+      {latest?.cost && (
+        <p className="-mt-6 text-caption text-muted-foreground tabular-nums">
+          Cost {usd(latest.cost.usd)} · {usd(latest.cost.per_mutant_killed)} per
+          mutant the Regress tests detect · {usd(latest.cost.per_bug_caught)}{" "}
+          per hidden bug caught
+        </p>
+      )}
       {partial && (
         <p className="-mt-6 text-caption text-muted-foreground">
           Totals cover {latest.counted_modules.length} of{" "}
@@ -553,8 +566,17 @@ export default function Evaluation() {
             <AlertDialogTitle>Run the full evaluation?</AlertDialogTitle>
             <AlertDialogDescription>
               The full evaluation runs Regress on all {suites.length} modules
-              with the configured model. It makes paid model calls and can take
-              a long time. The oracle check makes no model calls.
+              with{" "}
+              {estimate.data ? (
+                <span className="font-mono">{estimate.data.model}</span>
+              ) : (
+                "the configured model"
+              )}
+              {estimate.data?.expected_usd != null
+                ? `, for about ${usd(estimate.data.expected_usd)} (at most ${usd(estimate.data.max_usd)})`
+                : ""}
+              . It makes paid model calls and can take a long time. The oracle
+              check makes no model calls.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
