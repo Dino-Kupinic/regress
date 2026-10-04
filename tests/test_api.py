@@ -15,8 +15,8 @@ from conftest import ScriptedFactory, failing_llm, slow_llm
 from fastapi.testclient import TestClient
 
 from regress.api import create_app
-from regress.api.project import MAX_FILE_BYTES
 from regress.models import Mutant, MutantStatus, MutationRun, RunReport, Stage
+from regress.project import MAX_FILE_BYTES
 
 SOURCE = "export const add = (a: number, b: number) => a + b;\nexport const neg = (a: number) => -a;\n"
 

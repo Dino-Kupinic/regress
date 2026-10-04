@@ -178,6 +178,9 @@ class RunReport(BaseModel):
     test_file: str
     test_file_existed: bool
     model: str
+    # Source lines Stryker mutated, 1-based and inclusive; empty when it mutated the whole file.
+    mutate_lines: list[tuple[int, int]] = Field(default_factory=list)
+    batch_id: str | None = None
     status: RunStatus = "running"
     error: str | None = None
     stages: list[Stage] = Field(default_factory=list)

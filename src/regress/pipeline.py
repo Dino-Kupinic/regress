@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from regress.changes import format_ranges
 from regress.errors import CandidateRejected, RegressError
 from regress.files import atomic_write_text
 from regress.llm import LLM, Completion
@@ -52,8 +53,10 @@ class Pipeline:
         options: RunOptions | None = None,
         reporter: Reporter | None = None,
         store: RunStore | None = None,
+        batch_id: str | None = None,
     ) -> None:
         self.project = project
+        self.batch_id = batch_id
         self.llm = llm
         self.options = options or RunOptions()
         self.reporter = reporter or Reporter()
@@ -76,6 +79,8 @@ class Pipeline:
             test_file=self.project.test_rel,
             test_file_existed=self.workspace.original_tests is not None,
             model=self.llm.model,
+            mutate_lines=list(self.project.mutate_lines),
+            batch_id=self.batch_id,
         )
         kept: Version | None = None
         try:
@@ -242,7 +247,10 @@ class Pipeline:
         self.workspace.write_tests(version.content)
         self._mutation_runs += 1
         try:
-            with self.reporter.activity(f"Running mutation testing on {self.project.source_rel}"):
+            ranges = self.project.mutate_lines
+            single = len(ranges) == 1 and ranges[0][0] == ranges[0][1]
+            lines = f" ({'line' if single else 'lines'} {format_ranges(ranges)})" if ranges else ""
+            with self.reporter.activity(f"Running mutation testing on {self.project.source_rel}{lines}"):
                 run = run_stryker(
                     self.project, self.run_dir / "stryker", self._mutation_runs, self.options.stryker_timeout
                 )

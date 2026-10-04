@@ -10,6 +10,7 @@ import pytest
 from conftest import EXAMPLES, ScriptedLLM, requires_examples
 from typer.testing import CliRunner
 
+from regress.batch import Target, run_batch
 from regress.cli import app
 from regress.errors import CandidateRejected, RegressError
 from regress.evaluation import evaluate_regress, hidden_bugs_caught, load_suites, sandbox
@@ -211,3 +212,26 @@ def test_eval_counts_a_module_the_model_failed_as_its_existing_tests(root):
         assert ai.model_dump(exclude={"label"}) == existing.model_dump(exclude={"label"})
     assert result.counted_modules == ["cart"]
     assert result.totals[1].bugs_total == len(suite.bugs)
+
+
+def test_multi_file_run_mutates_only_the_changed_lines(root):
+    targets = [Target(root / "src/cart.ts", [(36, 48)]), Target(root / "src/slugify.ts")]
+    llm = ScriptedLLM(ONE_SHOT, ORACLE, "this is not a test file")
+
+    report = run_batch(root, targets, llm, RunOptions(max_repairs=0), changed_since="main")
+
+    cart, slugify = report.files
+    assert cart.status == "completed", cart.error
+    assert cart.mutate_lines == [(37, 47)]  # trimmed to the lines with code on them
+    # The model failing on one file fails that file, not the run of the others.
+    assert slugify.status == "failed" and "did not produce valid tests" in slugify.error
+    assert report.status == "failed"
+    run = json.loads((root / ".regress/runs" / cart.run_id / "report.json").read_text())
+    assert run["mutate_lines"] == [[37, 47]] and run["batch_id"] == report.id
+    for stage in run["stages"]:
+        if stage["mutation"]:
+            lines = {m["start_line"] for m in stage["mutation"]["mutants"]}
+            assert lines and min(lines) >= 37 and max(lines) <= 47
+    assert cart.score_first < cart.score_kept
+    assert report.totals.files == 1
+    assert (root / "src/slugify.ts").read_text() == (EXAMPLES / "src/slugify.ts").read_text()

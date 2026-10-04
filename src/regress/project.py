@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shutil
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -13,6 +14,8 @@ from regress.errors import ProjectError
 SOURCE_EXTENSIONS = (".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs")
 TEST_DIRS = ("test", "tests", "__tests__", "spec")
 SKIP_DIRS = {"node_modules", ".git", ".regress", ".stryker-tmp", "dist", "build", "coverage", "reports"}
+MAX_FILE_BYTES = 1_000_000
+_CONFIG_NAME = re.compile(r"\.(config|conf)\.[cm]?[jt]sx?$|\.d\.[cm]?ts$")
 
 REQUIRED_PACKAGES = ("vitest", "@stryker-mutator/core", "@stryker-mutator/vitest-runner")
 # Stryker's vitest runner (<= 10.x) never activates mutants under Vitest 5, so every mutant "survives".
@@ -51,6 +54,8 @@ class Project:
     source: Path
     test_file: Path
     toolchain: Toolchain
+    # Source lines to mutate, 1-based and inclusive. Empty means the whole file.
+    mutate_lines: tuple[tuple[int, int], ...] = ()
 
     @property
     def source_rel(self) -> str:
@@ -59,6 +64,13 @@ class Project:
     @property
     def test_rel(self) -> str:
         return self.test_file.relative_to(self.root).as_posix()
+
+    @property
+    def mutate_patterns(self) -> list[str]:
+        """Stryker `mutate` entries: the whole file, or one `path:start-end` range per changed block."""
+        if not self.mutate_lines:
+            return [self.source_rel]
+        return [f"{self.source_rel}:{start}-{end}" for start, end in self.mutate_lines]
 
     @property
     def import_path(self) -> str:
@@ -239,6 +251,38 @@ def default_test_path(root: Path, source: Path) -> Path:
         if (root / test_dir).is_dir():
             return root / test_dir / _mirror_dir(root, source) / name
     return source.parent / name
+
+
+def source_files(root: Path, under: Path | None = None) -> list[Path]:
+    """Files a run can target: JavaScript and TypeScript sources, without tests, configs, or type declarations.
+
+    Each one is a regular file that is not hidden, not too large, and belongs to this project rather than a
+    nested one with its own package.json. `under` limits the search to one directory of the project.
+    """
+    found = []
+    for directory, dirnames, filenames in os.walk(under or root):
+        here = Path(directory)
+        if here != root and "package.json" in filenames and (here / "package.json").is_file():
+            dirnames.clear()  # a nested project: none of its files are this project's sources
+            continue
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and d not in TEST_DIRS and not d.startswith(".")]
+        for name in filenames:
+            path = here / name
+            if (
+                name.startswith(".")
+                or path.suffix not in SOURCE_EXTENSIONS
+                or is_test_file(path)
+                or ".oracle." in name
+                or _CONFIG_NAME.search(name)
+            ):
+                continue
+            try:
+                info = path.lstat()  # lstat, so a symlink is never taken for the file it points to
+            except FileNotFoundError:
+                continue
+            if stat.S_ISREG(info.st_mode) and info.st_size <= MAX_FILE_BYTES:
+                found.append(path)
+    return sorted(found)
 
 
 def walk_files(root: Path):

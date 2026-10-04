@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import os
 import sys
 from pathlib import Path
@@ -11,7 +12,9 @@ from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
+from regress.batch import Target, resolve_targets, run_batch
 from regress.catalog import load_catalog
+from regress.changes import code_ranges, format_ranges
 from regress.config import (
     CONFIG_FILE,
     CONFIG_TEMPLATE,
@@ -114,7 +117,23 @@ def _fail(error: RegressError) -> NoReturn:
 
 @app.command()
 def run(
-    source: Annotated[Path, typer.Argument(help="Source file to test, e.g. src/cart.ts.")],
+    sources: Annotated[
+        list[Path] | None,
+        typer.Argument(
+            help="Source files or directories to test, e.g. src/cart.ts or src/. "
+            "With --changed, defaults to the current directory.",
+            metavar="SOURCE",
+            show_default=False,
+        ),
+    ] = None,
+    changed: Annotated[
+        str | None,
+        typer.Option(
+            "--changed",
+            metavar="REF",
+            help="Only source files changed since this git ref (e.g. main), mutating just the changed lines.",
+        ),
+    ] = None,
     test: Annotated[
         Path | None, typer.Option("--test", "-t", help="Test file to extend. Auto-detected by default.")
     ] = None,
@@ -138,11 +157,31 @@ def run(
     ] = False,
     yes: YesOption = False,
 ) -> None:
-    """Generate tests for SOURCE, then improve them from surviving mutants."""
+    """Generate tests for each source file, then improve them from surviving mutants."""
+    if not sources and changed is None:
+        _fail(ProjectError("Give a source file or directory to test, or --changed <ref> for changed files."))
+    paths = sources or [Path.cwd()]
     try:
-        root = find_project_root(source.expanduser().resolve().parent)
+        root, targets = resolve_targets(paths, changed)
+        single = len(paths) == 1 and not paths[0].is_dir()
+        if test is not None and not (single and len(targets) == 1):
+            raise ProjectError("--test works only with a single source file.")
+        if not targets:
+            where = ", ".join(escape(str(p)) for p in paths)
+            if changed is not None:
+                console.print(f"No source files changed since {escape(changed)} in {where}.")
+                return
+            raise ProjectError(f"No source files to test in {where}.")
         settings = load_settings(root, rounds=rounds, model=model, runner=runner)
-        project = load_project(source, test, settings.runner)
+        if single and len(targets) == 1:
+            target = targets[0]
+            lines = code_ranges(target.source.read_text(encoding="utf-8"), target.lines) if target.lines else []
+            if target.lines is not None and not lines:
+                console.print("Only comments, imports or blank lines changed; nothing to test.")
+                return
+            project = dataclasses.replace(load_project(target.source, test, settings.runner), mutate_lines=tuple(lines))
+        elif not yes and _interactive():
+            _confirm_targets(root, targets, changed)
         require_api_key()
         options = RunOptions(
             rounds=settings.rounds,
@@ -160,12 +199,33 @@ def run(
             max_duration=settings.llm_max_duration,
             max_output_tokens=settings.llm_max_output_tokens,
         ) as llm:
-            Pipeline(project, llm, options, ConsoleReporter(console, verbose)).run()
+            if single and len(targets) == 1:
+                Pipeline(project, llm, options, ConsoleReporter(console, verbose)).run()
+                return
+            console.print("[bold]regress[/]\n")
+            reporter = ConsoleReporter(console, verbose, banner=False)
+            result = run_batch(root, targets, llm, options, settings.runner, reporter, changed_since=changed)
+        if result.failed:
+            raise typer.Exit(1)
     except RegressError as error:
         _fail(error)
     except KeyboardInterrupt:
         err_console.print("\n[yellow]Interrupted.[/] The test file was restored.")
         raise typer.Exit(130) from None
+
+
+def _confirm_targets(root: Path, targets: list[Target], changed: str | None) -> None:
+    """List the files a multi-file run will cover, since each one costs model calls, and ask to go on."""
+    since = f" changed since {escape(changed)}" if changed else ""
+    console.print(f"[bold]{len(targets)} source {'file' if len(targets) == 1 else 'files'}[/]{since}:")
+    for target in targets[:20]:
+        lines = f" [dim]lines {format_ranges(target.lines)}[/]" if target.lines else ""
+        console.print(f"  {escape(target.source.relative_to(root).as_posix())}{lines}")
+    if len(targets) > 20:
+        console.print(f"  [dim]...and {len(targets) - 20} more[/]")
+    if not typer.confirm("Run Regress on each of them?", default=True):
+        raise typer.Exit(0)
+    console.print()
 
 
 @app.command()

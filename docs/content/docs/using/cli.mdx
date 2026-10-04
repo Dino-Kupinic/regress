@@ -27,7 +27,8 @@ regress run src/cart.ts --rounds 0 --yes
 
 | Option | Behavior |
 | --- | --- |
-| `--test`, `-t PATH` | Explicit test file to extend or create. Defaults to automatic discovery. |
+| `--changed REF` | Only source files changed since `REF`, mutating only their changed lines. See [below](#several-files-or-only-what-changed). |
+| `--test`, `-t PATH` | Explicit test file to extend or create. Defaults to automatic discovery. Single source file only. |
 | `--rounds INTEGER` | Improvement rounds after the first mutation run; 0–5, default 1 unless configured. |
 | `--model`, `-m MODEL` | Model for this invocation; skips the interactive model question. |
 | `--baseline` | Also mutation-test passing existing tests before generation. Default off. |
@@ -41,6 +42,23 @@ regress run src/cart.ts --rounds 0 --yes
 Source and explicit test paths are resolved relative to your shell's working directory. The test must be in the source's project and must differ from the source. Supported extensions are `.ts`, `.tsx`, `.mts`, `.cts`, `.js`, `.jsx`, `.mjs`, and `.cjs`.
 
 Existing tests must pass before Regress proceeds. Regress preserves their full test names in accepted candidates, but it may rewrite the test file. Inspect the final diff before committing.
+
+### Several files, or only what changed
+
+```bash
+regress run src/
+regress run src/cart.ts src/slugify.ts --yes
+regress run --changed main
+regress run src/ --changed main --baseline
+```
+
+Pass several source files or directories. A directory stands for every source file under it. Tests, configuration files, type declarations, hidden directories, dependency folders, and nested projects with their own `package.json` are left out. All paths must belong to the same project.
+
+`--changed REF` keeps only the source files that changed since the merge base of `REF` and `HEAD`. That covers commits on your branch, uncommitted edits, and untracked files, but not what happened on `REF` since you branched. Stryker mutates only the changed lines (Stryker's `path:start-end` ranges), so runs are faster and the improvement prompt is about the code you touched. Changed lines that hold only comments, imports or blank lines are dropped; a file with nothing else is skipped. Without paths, `--changed` covers the current directory, within the project that contains it. If nothing changed, Regress says so and exits with code 0.
+
+A single source file with `--changed` runs as usual, limited to its changed lines. With more than one file, Regress lists them and asks to go on, because each file costs model calls; `--yes` skips the question, as does a non-interactive terminal. The files run one after another with the same model and options. Each gets its own run directory; a file that fails (for example, its existing tests don't pass, or the model never writes valid tests) is recorded and the others still run. The command then exits with code 1. Ctrl-C stops the whole run.
+
+At the end, a table lists each file's changed lines, test counts, first and kept scores, and status. **First** is the first tests measured: the one-shot tests, or the existing tests with `--no-generate`. **Combined** counts every mutant of the files that have a score in both columns. The summary is saved to `.regress/batches/<id>.json`; see [Reports](/docs/reference/reports#multi-file-runs). `--test` works only with a single source file.
 
 ### Progress and cancellation
 

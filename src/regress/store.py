@@ -3,10 +3,14 @@ from __future__ import annotations
 import re
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from regress.errors import RegressError
 from regress.files import atomic_write_text
 from regress.models import RunReport
+
+if TYPE_CHECKING:
+    from regress.batch import BatchReport
 
 REPORT_FILE = "report.json"
 
@@ -55,6 +59,26 @@ class RunStore:
             except FileExistsError:
                 suffix += 1
                 run_dir = self.base / f"{stamp}-{slug}-{suffix}"
+
+    def create_batch_id(self) -> str:
+        """A fresh ID for a multi-file run, unique among saved batches."""
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        batch_id, suffix = f"{stamp}-batch", 1
+        while self.batch_path(batch_id).exists():
+            suffix += 1
+            batch_id = f"{stamp}-batch-{suffix}"
+        return batch_id
+
+    def batch_path(self, batch_id: str) -> Path:
+        return self.root / ".regress" / "batches" / f"{batch_id}.json"
+
+    def save_batch(self, report: BatchReport) -> None:
+        """Save a multi-file run's summary next to the runs it grouped."""
+        regress_dir(self.root)
+        path = self.batch_path(report.id)
+        _check_artifact_path(self.root, path.parent)
+        path.parent.mkdir(exist_ok=True)
+        atomic_write_text(path, report.model_dump_json(indent=2))
 
     def save(self, report: RunReport, run_dir: Path) -> None:
         _check_artifact_path(self.root, run_dir)
