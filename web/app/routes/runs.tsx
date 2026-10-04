@@ -220,8 +220,17 @@ export default function Runs() {
                     </TableCell>
                     <TableCell>
                       <div className="font-mono">{run.source_file}</div>
-                      <div className="text-xs text-muted-foreground">
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
                         {run.model}
+                        {run.batch_id && (
+                          <Link
+                            to={`/batches/${encodeURIComponent(run.batch_id)}`}
+                            className="underline-offset-4 hover:text-foreground hover:underline"
+                            onClick={(event) => event.stopPropagation()}
+                          >
+                            part of a multi-file run
+                          </Link>
+                        )}
                       </div>
                     </TableCell>
                     <TableCell>

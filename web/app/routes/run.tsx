@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Link,
   type MetaFunction,
   useLoaderData,
   useNavigate,
@@ -196,6 +197,14 @@ export default function RunPage() {
               {run.summary.source_file}
             </h1>
             <RunStatusBadge status={run.summary.status} active={isLive} />
+            {run.summary.batch_id && (
+              <Link
+                to={`/batches/${encodeURIComponent(run.summary.batch_id)}`}
+                className="text-caption text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+              >
+                Part of a multi-file run
+              </Link>
+            )}
           </div>
           <dl className="flex flex-wrap gap-x-6 gap-y-1 text-caption">
             <Meta label="Tests">

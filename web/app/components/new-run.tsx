@@ -1,4 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { Check, CircleAlert, Copy, Search, X } from "lucide-react";
 import {
   createContext,
@@ -11,6 +16,7 @@ import { Link, useNavigate } from "react-router";
 import { matchSources, SOURCE_LIMIT } from "~/components/source-picker";
 import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import { Button } from "~/components/ui/button";
+import { Checkbox } from "~/components/ui/checkbox";
 import {
   Field,
   FieldContent,
@@ -25,7 +31,6 @@ import {
   InputGroupButton,
   InputGroupInput,
 } from "~/components/ui/input-group";
-import { RadioGroup, RadioGroupItem } from "~/components/ui/radio-group";
 import {
   Select,
   SelectContent,
@@ -57,6 +62,8 @@ const Context = createContext<DrawerContext>({
 export const useNewRun = () => useContext(Context);
 
 const DEFAULT_MODEL = "__default__";
+/** The API's limit for one multi-file run. */
+const MAX_FILES = 100;
 
 export function NewRunProvider({
   children,
@@ -66,7 +73,7 @@ export function NewRunProvider({
   project?: ProjectInfo;
 }) {
   const [opened, setOpened] = useState(false);
-  const [source, setSource] = useState("");
+  const [selected, setSelected] = useState<string[]>([]);
   const [search, setSearch] = useState("");
   const [model, setModel] = useState(DEFAULT_MODEL);
   const [rounds, setRounds] = useState(1);
@@ -85,28 +92,62 @@ export function NewRunProvider({
     queryFn: () => api.models(),
     enabled: opened,
   });
-  const detail = useQuery({
-    queryKey: ["source", source],
-    queryFn: () => api.source(source),
-    enabled: opened && !!source,
+  // One lookup per selected file (bounded by MAX_FILES): which test file it extends, and whether it exists.
+  const details = useQueries({
+    queries: selected.map((path) => ({
+      queryKey: ["source", path],
+      queryFn: () => api.source(path),
+      enabled: opened,
+    })),
   });
+  const single = selected.length === 1;
+  const detail = single ? details[0] : undefined;
+  const loaded = details.every((item) => item.data || item.isError);
+  const failed = selected.filter((_, index) => details[index]?.isError);
+  const withTests = details.filter(
+    (item) => item.data?.test_file_exists,
+  ).length;
+  const hasTests = withTests > 0;
   const run = useMutation({
-    mutationFn: api.startRun,
-    onSuccess: async (result) => {
+    mutationFn: () => {
+      const options = {
+        model: model === DEFAULT_MODEL ? undefined : model,
+        rounds,
+        baseline: baseline && hasTests,
+        generate: generate || !hasTests,
+      };
+      return single
+        ? api.startRun({ source: selected[0], ...options }).then((result) => ({
+            to: `/runs/${encodeURIComponent(result.summary.id)}`,
+          }))
+        : api.startBatch({ sources: selected, ...options }).then((result) => ({
+            to: `/batches/${encodeURIComponent(result.id)}`,
+          }));
+    },
+    onSuccess: async ({ to }) => {
       await queryClient.invalidateQueries({ queryKey: ["runs"] });
+      await queryClient.invalidateQueries({ queryKey: ["project"] });
       setOpened(false);
-      navigate(`/runs/${encodeURIComponent(result.summary.id)}`);
+      navigate(to);
     },
     onError: (failure) => setError(failure.message),
   });
   useEffect(() => {
-    if (detail.data && !detail.data.test_file_exists) {
+    if (loaded && !hasTests) {
       setBaseline(false);
       setGenerate(true);
     }
-  }, [detail.data]);
+  }, [loaded, hasTests]);
+  const toggle = (path: string, checked: boolean) =>
+    setSelected((old) =>
+      checked
+        ? old.includes(path) || old.length >= MAX_FILES
+          ? old
+          : [...old, path]
+        : old.filter((item) => item !== path),
+    );
   const open = (initial?: string) => {
-    setSource(initial ?? "");
+    setSelected(initial ? [initial] : []);
     setSearch("");
     setError("");
     setModel(DEFAULT_MODEL);
@@ -116,15 +157,30 @@ export function NewRunProvider({
     setOpened(true);
   };
   const matches = matchSources(sources.data ?? [], search);
-  // Render a bounded list, keeping the chosen file in it.
-  const chosen = matches.find((item) => item.path === source);
+  // Render a bounded list, keeping the selected files in it, first.
   const filtered = matches.slice(0, SOURCE_LIMIT);
-  if (chosen && !filtered.includes(chosen)) filtered.unshift(chosen);
+  const pinned = (sources.data ?? []).filter(
+    (item) => selected.includes(item.path) && !filtered.includes(item),
+  );
+  const shown = [...pinned, ...filtered];
   const hidden = matches.length - filtered.length;
-  const hasTests = !!detail.data?.test_file_exists;
+  const allShown =
+    filtered.length > 0 &&
+    filtered.every((item) => selected.includes(item.path));
+  const selectShown = (checked: boolean) =>
+    setSelected((old) =>
+      checked
+        ? [
+            ...old,
+            ...filtered
+              .map((item) => item.path)
+              .filter((path) => !old.includes(path)),
+          ].slice(0, MAX_FILES)
+        : old.filter((path) => !filtered.some((item) => item.path === path)),
+    );
   const command = [
     "regress run",
-    source || "<source>",
+    selected.length ? selected.join(" ") : "<source>",
     model !== DEFAULT_MODEL && `--model ${model}`,
     baseline && hasTests && "--baseline",
     !generate && hasTests && "--no-generate",
@@ -133,15 +189,21 @@ export function NewRunProvider({
   ]
     .filter(Boolean)
     .join(" ");
-  const blocked = project?.active_run
-    ? "Another run is in progress"
-    : project && !project.ready
-      ? "Finish project setup first"
-      : !source
-        ? "Choose a source file"
-        : detail.isError
-          ? "This file can't be run"
-          : null;
+  const busy = project?.active_run ?? null;
+  const blocked =
+    busy || project?.active_batch
+      ? "Another run is in progress"
+      : project && !project.ready
+        ? "Finish project setup first"
+        : !selected.length
+          ? "Choose source files"
+          : failed.length
+            ? `${failed.length === 1 ? failed[0] : `${failed.length} files`} can't be run`
+            : null;
+  const optionNote =
+    !single && selected.length && hasTests && withTests < selected.length
+      ? `${withTests} of ${selected.length} files have tests`
+      : null;
   return (
     <Context.Provider value={{ open, opened }}>
       {children}
@@ -156,7 +218,7 @@ export function NewRunProvider({
           <div className="flex flex-1 flex-col gap-8 overflow-y-auto p-6 scroll-fade">
             <section className="flex flex-col gap-3">
               <div className="flex items-baseline justify-between">
-                <h3 className="font-medium">Source file</h3>
+                <h3 className="font-medium">Source files</h3>
                 <span className="text-caption text-muted-foreground tabular-nums">
                   {search
                     ? `${matches.length} of ${sources.data?.length ?? 0}`
@@ -174,6 +236,42 @@ export function NewRunProvider({
                   onChange={(event) => setSearch(event.target.value)}
                 />
               </InputGroup>
+              <div className="flex min-h-8 items-center justify-between gap-3">
+                <Field orientation="horizontal" className="w-auto">
+                  <Checkbox
+                    id="select-shown"
+                    checked={
+                      allShown
+                        ? true
+                        : filtered.some((item) => selected.includes(item.path))
+                          ? "indeterminate"
+                          : false
+                    }
+                    disabled={!filtered.length}
+                    onCheckedChange={(checked) => selectShown(checked === true)}
+                  />
+                  <FieldLabel
+                    htmlFor="select-shown"
+                    className="text-caption font-normal text-muted-foreground"
+                  >
+                    {search ? "Select all matches shown" : "Select all shown"}
+                  </FieldLabel>
+                </Field>
+                <span className="flex items-center gap-2 text-caption tabular-nums">
+                  {selected.length
+                    ? `${selected.length} selected`
+                    : "None selected"}
+                  {selected.length > 0 && (
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      onClick={() => setSelected([])}
+                    >
+                      Clear
+                    </Button>
+                  )}
+                </span>
+              </div>
               <div className="max-h-60 overflow-y-auto rounded-lg border scroll-fade">
                 {sources.isPending ? (
                   <div className="flex flex-col gap-3 p-4">
@@ -181,22 +279,25 @@ export function NewRunProvider({
                       <Skeleton key={index} className="h-5" />
                     ))}
                   </div>
-                ) : filtered.length ? (
-                  <RadioGroup
-                    value={source}
-                    onValueChange={setSource}
-                    aria-label="Source file"
-                    className="gap-0 divide-y"
-                  >
-                    {filtered.map((item) => (
+                ) : shown.length ? (
+                  <ul aria-label="Source files" className="divide-y">
+                    {shown.map((item) => (
                       <Field
                         key={item.path}
                         orientation="horizontal"
+                        role="listitem"
                         className="px-4 py-3 transition-colors hover:bg-accent has-data-checked:bg-accent"
                       >
-                        <RadioGroupItem
-                          value={item.path}
+                        <Checkbox
                           id={`source-${item.path}`}
+                          checked={selected.includes(item.path)}
+                          disabled={
+                            !selected.includes(item.path) &&
+                            selected.length >= MAX_FILES
+                          }
+                          onCheckedChange={(checked) =>
+                            toggle(item.path, checked === true)
+                          }
                         />
                         <FieldLabel
                           htmlFor={`source-${item.path}`}
@@ -209,7 +310,7 @@ export function NewRunProvider({
                         </span>
                       </Field>
                     ))}
-                  </RadioGroup>
+                  </ul>
                 ) : (
                   <p className="p-4 text-sm text-muted-foreground">
                     No matching source files.
@@ -222,17 +323,28 @@ export function NewRunProvider({
                   </p>
                 )}
               </div>
-              {detail.isError && (
+              {failed.length > 0 && (
                 <p className="text-caption text-destructive">
-                  {detail.error.message}
+                  {failed.length === 1 && single
+                    ? details[0]?.error?.message
+                    : `Can't run ${failed.join(", ")}.`}
                 </p>
               )}
-              {detail.data && (
+              {detail?.data && (
                 <p className="text-caption text-muted-foreground motion-safe:animate-in fade-in-0">
                   <span className="font-mono text-foreground">
                     {detail.data.test_file}
                   </span>{" "}
                   will be {hasTests ? "extended" : "created"}.
+                </p>
+              )}
+              {!single && selected.length > 1 && loaded && (
+                <p className="text-caption text-muted-foreground motion-safe:animate-in fade-in-0">
+                  The files run one after another, each as its own run.{" "}
+                  {withTests} of {selected.length} already{" "}
+                  {withTests === 1 ? "has" : "have"} tests.
+                  {selected.length >= MAX_FILES &&
+                    ` At most ${MAX_FILES} files per run.`}
                 </p>
               )}
             </section>
@@ -288,6 +400,7 @@ export function NewRunProvider({
                     </FieldLabel>
                     <FieldDescription>
                       Mutation-test the existing tests first
+                      {optionNote && ` (${optionNote})`}
                     </FieldDescription>
                   </FieldContent>
                   <Switch
@@ -304,6 +417,7 @@ export function NewRunProvider({
                     </FieldLabel>
                     <FieldDescription>
                       Improve the existing test file directly
+                      {optionNote && `; files without tests are skipped`}
                     </FieldDescription>
                   </FieldContent>
                   <Switch
@@ -376,11 +490,15 @@ export function NewRunProvider({
             )}
             <div className="flex items-center justify-between gap-3">
               <span className="text-caption text-muted-foreground">
-                {project?.active_run ? (
+                {busy || project?.active_batch ? (
                   <>
                     Another run is in progress.{" "}
                     <Link
-                      to={`/runs/${encodeURIComponent(project.active_run)}`}
+                      to={
+                        project?.active_batch
+                          ? `/batches/${encodeURIComponent(project.active_batch)}`
+                          : `/runs/${encodeURIComponent(busy ?? "")}`
+                      }
                       className="text-foreground underline underline-offset-4"
                       onClick={() => setOpened(false)}
                     >
@@ -388,7 +506,8 @@ export function NewRunProvider({
                     </Link>
                   </>
                 ) : (
-                  (blocked ?? "One run at a time")
+                  (blocked ??
+                  (single ? "One run at a time" : "One file at a time"))
                 )}
               </span>
               <div className="flex gap-2">
@@ -396,19 +515,15 @@ export function NewRunProvider({
                   Cancel
                 </Button>
                 <Button
-                  disabled={!!blocked || !detail.data || run.isPending}
-                  onClick={() =>
-                    run.mutate({
-                      source,
-                      model: model === DEFAULT_MODEL ? undefined : model,
-                      rounds,
-                      baseline: baseline && hasTests,
-                      generate: generate || !hasTests,
-                    })
-                  }
+                  disabled={!!blocked || !loaded || run.isPending}
+                  onClick={() => run.mutate()}
                 >
                   {run.isPending && <Spinner data-icon="inline-start" />}
-                  {run.isPending ? "Starting" : "Start run"}
+                  {run.isPending
+                    ? "Starting"
+                    : single || !selected.length
+                      ? "Start run"
+                      : `Run ${selected.length} files`}
                 </Button>
               </div>
             </div>
