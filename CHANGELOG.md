@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.3.0 (2026-10-04)
+
+### Documentation
+
+- Add a CI guide for regress check with a GitHub Actions workflow
+  ([`b5f4c5a`](https://github.com/Dino-Kupinic/regress/commit/b5f4c5ad1469a9de337ee48a1a431ebf7f4709a9))
+
+### Features
+
+- Add regress check, a model-free mutation score gate for CI
+  ([`dc3793b`](https://github.com/Dino-Kupinic/regress/commit/dc3793b2baca26e8674031f25465909aec0035c0))
+
+
 ## v0.2.0 (2026-10-04)
 
 ### Continuous Integration
