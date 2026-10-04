@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v0.4.0 (2026-10-04)
+
+### Documentation
+
+- Explain how to configure each model provider
+  ([`0dc04af`](https://github.com/Dino-Kupinic/regress/commit/0dc04af70aee80d22470df0e77cb784f98c9ed16))
+
+### Features
+
+- Run on Anthropic models and OpenAI-compatible servers
+  ([`e9d7862`](https://github.com/Dino-Kupinic/regress/commit/e9d7862662bce81d877c8eaf993ec0fd70eb5da6))
+
+- **web**: Choose the provider in settings and show its key
+  ([`b54917c`](https://github.com/Dino-Kupinic/regress/commit/b54917c67de30b94b370248b1df261537b0c73b1))
+
+
 ## v0.3.0 (2026-10-04)
 
 ### Documentation
