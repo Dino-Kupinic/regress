@@ -53,6 +53,10 @@ The server binds to `127.0.0.1` by default and has no authentication of its own.
 | `GET` | `/runs/{id}` | The report, plus `live` state while it runs. |
 | `POST` | `/runs/{id}/cancel` | Requests cancellation, like Ctrl-C in the CLI. Returns `202`; the run ends as `cancelled`. |
 | `DELETE` | `/runs/{id}` | Deletes a finished run's artifacts. Returns `204`. The test file is not touched. |
+| `POST` | `/batches` | Runs several source files one after another. Returns `202`, the batch detail, and a `Location` header. See [Run several files](#run-several-files). |
+| `GET` | `/batches` | Every multi-file run, newest first. |
+| `GET` | `/batches/{id}` | Each file's status, run ID and scores, the `combined` score, and `current_run` while it is going. |
+| `POST` | `/batches/{id}/cancel` | Stops the current run and starts no more files. Returns `202`. |
 | `GET` | `/runs/{id}/events?after=0` | The run's log entries after a sequence number. |
 | `GET` | `/runs/{id}/events/stream` | The same log as server-sent events. |
 | `GET` | `/runs/{id}/diff` | Original test file against the kept tests. |
@@ -93,6 +97,18 @@ curl --request POST http://127.0.0.1:8765/api/runs \
 
 Unknown fields and values of the wrong type are rejected with `422`. The response is the new run's detail; its `summary.id` is the run ID.
 
+## Run several files
+
+```bash
+curl --request POST http://127.0.0.1:8765/api/batches \
+  --header 'content-type: application/json' \
+  --data '{"sources": ["src/cart.ts", "src/slugify.ts"], "rounds": 1}'
+```
+
+The body takes `sources` (1–100 paths; duplicates are dropped) and the same `model`, `rounds`, `baseline`, `generate` and `runner` as a single run. Every file is checked before anything starts: a path that can't be run is refused with `400`, naming the file. With `generate: false`, files without a test file are skipped, and the request is refused if no file has one.
+
+Each file becomes an ordinary run, so follow `current_run` with the run endpoints. Each run's summary carries `batch_id`. The project stays reserved until the last file is over: other runs and evaluations get `409` meanwhile, and `/api/project` reports `active_batch`. A file that fails is recorded with its `error` and the others still run. Cancelling the batch, or its current run, stops the batch; files not reached stay `pending`. The summary is saved to `.regress/batches/<id>.json`, the same format as a CLI multi-file run. A batch still running when the server stopped is marked `cancelled` at the next start; its interrupted run is recovered like any other.
+
 ## Follow a run
 
 Poll `GET /runs/{id}` and `GET /runs/{id}/events?after=N`, passing the last `seq` you received, until `summary.active` is false. Or stream:
@@ -111,7 +127,7 @@ A finished run replays its log and ends straight away.
 
 ## One job at a time
 
-The server runs one project operation at a time: a run, an evaluation, or a dependency install. Starting another while one is active returns `409` with a message that names what is running. An exclusive filesystem lock prevents two API servers from changing the same project.
+The server runs one project operation at a time: a run, a batch of runs, an evaluation, or a dependency install. Starting another while one is active returns `409` with a message that names what is running. An exclusive filesystem lock prevents two API servers from changing the same project.
 
 During a rolling restart, the replacement server answers `/api/ready` while waiting up to 30 seconds for the previous server to release that lock. Run, evaluation, and dependency-install submissions return `503` during this handoff; retry after the replacement takes ownership. If the old server does not release the project in time, the replacement exits.
 

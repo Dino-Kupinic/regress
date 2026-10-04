@@ -276,6 +276,9 @@ The OpenAPI schema at `/api/openapi.json` describes every request and response, 
 | `POST` | `/api/runs` | Start a run. Returns `202` with the run's ID at once |
 | `GET` | `/api/runs/{id}` | Summary and report, and while it runs, what it is doing (`live`) |
 | `POST` | `/api/runs/{id}/cancel` | Stop the run and restore the test file |
+| `POST` | `/api/batches` | Run several files one after another (`sources: [...]`), like `regress run a.ts b.ts` |
+| `GET` | `/api/batches`, `/api/batches/{id}` | Multi-file runs: each file's result and run ID, the combined score, the current run |
+| `POST` | `/api/batches/{id}/cancel` | Stop the current run and start no more files |
 | `DELETE` | `/api/runs/{id}` | Delete a finished run's artifacts |
 | `GET` | `/api/runs/{id}/events` | The run's log. Poll with `?after=<last seq>` |
 | `GET` | `/api/runs/{id}/events/stream` | The log and live activity as server-sent events |
