@@ -131,7 +131,7 @@ function AppShell() {
         <AppSidebar
           project={project.data}
           activeRun={active}
-          model={settings.data?.effective.model}
+          model={settings.data?.effective.model ?? undefined}
         />
         <SidebarInset className="min-w-0">
           <SiteHeader projectName={project.data?.name} api={apiState} />

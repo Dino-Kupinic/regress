@@ -328,8 +328,14 @@ export function NewRunProvider({
                 ))}
                 <PreflightRow
                   ok={!!project?.api_key_set}
-                  label="OPENAI_API_KEY"
-                  value={project?.api_key_set ? "Set on server" : "Not set"}
+                  label={project?.api_key_name ?? "API key"}
+                  value={
+                    project?.api_key_name === null
+                      ? "Not needed"
+                      : project?.api_key_set
+                        ? "Set on server"
+                        : "Not set"
+                  }
                 />
               </ul>
               {project && !project.ready && (

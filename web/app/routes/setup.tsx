@@ -24,7 +24,7 @@ import {
   InputGroupInput,
 } from "~/components/ui/input-group";
 import { Spinner } from "~/components/ui/spinner";
-import { api } from "~/lib/api";
+import { api, providerLabels } from "~/lib/api";
 import { copyToClipboard } from "~/lib/clipboard";
 import { cn, pageTitle } from "~/lib/utils";
 
@@ -69,7 +69,10 @@ export default function Setup() {
     ["Project package.json", true],
     ["Vitest + Stryker", !!project.toolchain],
     ["regress.toml", project.config_file ? true : null],
-    ["OpenAI API key", project.api_key_set ? true : null],
+    [
+      `${providerLabels[project.provider]} API key`,
+      project.api_key_set ? true : null,
+    ],
   ];
   return (
     <Page>
@@ -174,15 +177,18 @@ export default function Setup() {
           </Step>
           <Step
             number={3}
-            title="Connect OpenAI"
+            title={`Connect ${providerLabels[project.provider]}`}
             description="Keep the API key in the Python server environment."
             status={project.api_key_set ? "Set" : "Not set"}
             done={project.api_key_set}
           >
             <CardContent>
               <p className="text-sm leading-relaxed">
-                Add <code className="font-mono">OPENAI_API_KEY</code> to the
-                server environment or to the repository's{" "}
+                Add{" "}
+                <code className="font-mono">
+                  {project.api_key_name ?? "the server's key, if it needs one,"}
+                </code>{" "}
+                to the server environment or to the repository's{" "}
                 <code className="font-mono">.env</code> file, then restart{" "}
                 <code className="font-mono">regress serve</code>. The web app
                 does not store or display the key.
