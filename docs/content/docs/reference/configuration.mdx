@@ -29,6 +29,7 @@ The web app's **Settings** page and `regress models --set` write the personal co
 | `llm_max_output_tokens` | `32768` | 1024–131072 | Output budget for one model response, including reasoning. |
 | `vitest_timeout` | `300` | 10–14400 s | Time limit for one Vitest validation run. |
 | `stryker_timeout` | `1800` | 30–86400 s | Time limit for one Stryker mutation run. |
+| `fail_under` | none | 0–100 % | `regress check` fails below this combined mutation score. See [Continuous integration](/docs/using/ci). |
 
 Unknown keys, values outside these ranges, and values of the wrong type are rejected with the file that contains them. Strings are not converted: write `rounds = 2`, not `rounds = "2"`.
 

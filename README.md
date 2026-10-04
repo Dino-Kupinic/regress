@@ -47,6 +47,7 @@ regress init                 # check the project, install Vitest + Stryker, writ
 regress run src/cart.ts      # pick a model, generate, mutation-test, improve, compare
 regress run src/             # every source file in a directory, one after another
 regress run --changed main   # only files this branch changed, mutating only the changed lines
+regress check --changed main --fail-under 80   # CI gate: score the existing tests, no model
 regress report               # show the latest run (or: --list, <run-id>, --json)
 regress models               # list the latest models, set your default
 regress serve                # HTTP API for the web app on http://127.0.0.1:8765/api
@@ -118,6 +119,10 @@ This is a scripted-model run where one line of `src/cart.ts` changed (one mutant
 `--changed REF` limits the run to source files git sees as changed since the merge base of `REF` and `HEAD`, so `main` means "what this branch changed", including uncommitted and untracked files. Stryker then mutates only the changed lines, so mutation runs are faster and the surviving mutants sent to the model are about the code you touched. A file where only comments, imports or blank lines changed is skipped. With paths, `--changed` keeps only the changed files under them; without, it looks under the current directory.
 
 Before a run over several files, Regress lists them and asks to go on, since each one costs model calls (`--yes` skips this). A file that fails is recorded and the others still run; the command then exits with code 1. **Combined** adds up the mutants of every file scored in both columns. The summary is saved to `.regress/batches/<id>.json`. `--test` works only with a single source file.
+
+### Checking in CI
+
+`regress check` mutation-tests the existing tests without calling the model, so it costs nothing and needs no API key. It takes the same paths and `--changed` as `regress run`. `--fail-under 80` (or `fail_under` in `regress.toml`) exits with code 1 below a combined score of 80%, or when a checked file has no tests; existing tests that fail always do. `--json` prints the report, and `--markdown comment.md` writes a pull request comment with each file's score and the surviving mutants as diffs. Results are saved to `.regress/checks/<id>/`. The [CI guide](docs/content/docs/using/ci.mdx) has a GitHub Actions workflow that keeps one such comment up to date.
 
 ### Choosing a model
 
@@ -221,6 +226,7 @@ llm_max_duration = 1800  # total budget for one proposal, including retries
 llm_max_output_tokens = 32768  # output budget per request, including reasoning
 vitest_timeout = 300  # seconds a Vitest run may take before a candidate counts as hanging
 stryker_timeout = 1800  # seconds for one mutation run
+# fail_under = 80     # `regress check` fails below this combined mutation score
 ```
 
 ## HTTP API
@@ -349,6 +355,7 @@ Code map (`src/regress/`):
 | `cli.py` | Typer commands |
 | `pipeline.py` | The generate → validate → mutate → improve loop |
 | `batch.py`, `changes.py` | Multi-file runs, and the changed lines from `git diff` |
+| `check.py` | `regress check`: scoring the existing tests, the gate, and the PR comment |
 | `project.py` | Project, toolchain and test-file discovery |
 | `vitest.py`, `stryker.py` | Tool adapters |
 | `validate.py` | Candidate checks |

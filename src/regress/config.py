@@ -27,6 +27,7 @@ runner = "auto"       # how to run Vitest and Stryker: "bun", "npx", or "auto"
 # llm_timeout = 120   # seconds without any data from the model before Regress retries (up to 3 attempts)
 # llm_max_duration = 1800  # total seconds allowed for one proposal, including retries
 # llm_max_output_tokens = 32768  # output budget, including model reasoning
+# fail_under = 80     # `regress check` fails below this combined mutation score (percent)
 """
 
 USER_CONFIG_HEADER = "# Your personal Regress defaults. Manage them with `regress models`.\n"
@@ -51,6 +52,7 @@ class Settings(BaseModel):
     llm_max_output_tokens: int = Field(default=32768, ge=1024, le=131072)
     vitest_timeout: int = Field(default=300, ge=10, le=14400)
     stryker_timeout: int = Field(default=1800, ge=30, le=86400)
+    fail_under: float | None = Field(default=None, ge=0, le=100)  # `regress check` gate, in percent
 
     _model_source: ModelSource = PrivateAttr(default="built-in default")
 

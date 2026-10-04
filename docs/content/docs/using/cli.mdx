@@ -68,6 +68,15 @@ In the live summary, **Killed** includes mutants that timed out. `report.json` c
 
 Press Ctrl-C to interrupt. The CLI exits with code 130 and restores the original test file. Normal command errors exit with code 1. Reports and intermediate artifacts help diagnose failures.
 
+## Check the existing tests
+
+```bash
+regress check src/ --fail-under 80
+regress check --changed origin/main --fail-under 80 --markdown comment.md
+```
+
+`check` mutation-tests the existing tests without calling the model, so it needs no API key. It takes the same paths and `--changed` as `run`, and exits with code 1 below `--fail-under`, when a file has no tests under a threshold, or when the existing tests fail. `--json` prints the report; `--markdown PATH` writes a pull request comment. See [Continuous integration](/docs/using/ci) for the options and a GitHub Actions workflow.
+
 ## Inspect reports
 
 ```bash
