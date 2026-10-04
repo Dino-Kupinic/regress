@@ -54,6 +54,8 @@ class Project:
     source: Path
     test_file: Path
     toolchain: Toolchain
+    # Source lines to mutate, 1-based and inclusive. Empty means the whole file.
+    mutate_lines: tuple[tuple[int, int], ...] = ()
 
     @property
     def source_rel(self) -> str:
@@ -62,6 +64,13 @@ class Project:
     @property
     def test_rel(self) -> str:
         return self.test_file.relative_to(self.root).as_posix()
+
+    @property
+    def mutate_patterns(self) -> list[str]:
+        """Stryker `mutate` entries: the whole file, or one `path:start-end` range per changed block."""
+        if not self.mutate_lines:
+            return [self.source_rel]
+        return [f"{self.source_rel}:{start}-{end}" for start, end in self.mutate_lines]
 
     @property
     def import_path(self) -> str:

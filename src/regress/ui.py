@@ -15,10 +15,12 @@ from rich.prompt import Confirm, Prompt
 from rich.table import Table
 from rich.text import Text
 
+from regress.changes import format_ranges
 from regress.models import MutantStatus, MutationRun, RunReport, Stage
 from regress.mutants import short_description
 
 if TYPE_CHECKING:
+    from regress.batch import BatchReport, FileResult
     from regress.catalog import Catalog
     from regress.config import Settings
     from regress.project import Project
@@ -48,6 +50,11 @@ class Reporter:
     def warn(self, message: str) -> None: ...
     def note(self, message: str) -> None: ...
     def finish(self, report: RunReport, run_dir: Path) -> None: ...
+
+    # Multi-file runs: around each file's run, and once at the end.
+    def file_start(self, index: int, total: int, result: FileResult) -> None: ...
+    def file_end(self, result: FileResult) -> None: ...
+    def batch_finish(self, report: BatchReport, path: Path) -> None: ...
 
 
 def score_style(score: float) -> str:
@@ -90,9 +97,10 @@ class QuietColumn(ProgressColumn):
 
 
 class ConsoleReporter(Reporter):
-    def __init__(self, console: Console | None = None, verbose: bool = False) -> None:
+    def __init__(self, console: Console | None = None, verbose: bool = False, banner: bool = True) -> None:
         self.console = console or Console(highlight=False)
         self.verbose = verbose
+        self.banner = banner  # off for each file of a multi-file run, which prints its own
         self._runs = 0
         self._model = ""
 
@@ -100,12 +108,15 @@ class ConsoleReporter(Reporter):
         self.console.print(f"{label:<{LABEL_WIDTH}}[{style}]{str(value):>{VALUE_WIDTH}}[/]")
 
     def start(self, project: Project, report: RunReport) -> None:
-        self.console.print("[bold]regress[/]\n")
+        if self.banner:
+            self.console.print("[bold]regress[/]\n")
         self.console.print(f"Analyzing [bold]{escape(project.source_rel)}[/]...")
         tests = escape(project.test_rel) + ("" if report.test_file_existed else " [dim](will be created)[/]")
         root = _display_path(project.root)
         self.console.print(f"[dim]  project  {escape(root)} ({project.toolchain.describe()})[/]")
         self.console.print(f"[dim]  tests    [/][dim]{tests}[/]")
+        if project.mutate_lines:
+            self.console.print(f"[dim]  lines    {format_ranges(project.mutate_lines)} (changed)[/]")
         self.console.print(f"[dim]  model    {escape(report.model)}[/]\n")
         self._model = report.model
 
@@ -246,6 +257,22 @@ class ConsoleReporter(Reporter):
             self.console.print(f"[green]✓[/] Kept {kept.label.lower()} in [bold]{escape(report.test_file)}[/]")
         self.console.print(f"[dim]Report saved to {escape(_display_path(run_dir))} · view it with `regress report`[/]")
 
+    def file_start(self, index: int, total: int, result: FileResult) -> None:
+        if index > 1:
+            self.console.print()
+        self.console.rule(f"[bold]{index}/{total}  {escape(result.source_file)}[/]", align="left")
+
+    def file_end(self, result: FileResult) -> None:
+        if result.status == "failed":
+            self.console.print(f"[red bold]error:[/] {escape(result.error or 'the run failed')}")
+        elif result.status == "skipped":
+            self.console.print(f"[dim]Skipped: {escape(result.error or '')}[/]")
+
+    def batch_finish(self, report: BatchReport, path: Path) -> None:
+        self.console.print()
+        render_batch(report, self.console)
+        self.console.print(f"\n[dim]Summary saved to {escape(_display_path(path))}[/]")
+
 
 def render_report(report: RunReport, run_dir: Path, console: Console, show_mutants: int = 10) -> None:
     status = {"completed": "[green]completed[/]", "failed": "[red]failed[/]", "cancelled": "[yellow]cancelled[/]"}.get(
@@ -254,6 +281,8 @@ def render_report(report: RunReport, run_dir: Path, console: Console, show_mutan
     console.print(f"[bold]regress report[/] [dim]{report.id}[/]\n")
     console.print(f"[dim]Source   [/]{escape(report.source_file)}")
     console.print(f"[dim]Tests    [/]{escape(report.test_file)}")
+    if report.mutate_lines:
+        console.print(f"[dim]Lines    [/]{format_ranges(report.mutate_lines)} [dim](changed lines only)[/]")
     console.print(f"[dim]Model    [/]{escape(report.model)}")
     console.print(f"[dim]Status   [/]{status} [dim]in {report.duration_seconds:.0f}s[/]")
     if report.error:
@@ -317,6 +346,54 @@ def _render_survivors(
         console.print(f"  [dim]{escape(where):<22}[/] {escape(mutant.mutator):<22} {escape(detail)} [dim]({tag})[/]")
     if len(undetected) > limit:
         console.print(f"  [dim]...and {len(undetected) - limit} more (use --mutants N)[/]")
+
+
+def render_batch(report: BatchReport, console: Console) -> None:
+    """The per-file table of a multi-file run, with combined scores over the files measured in both columns."""
+    title = f"Changed since {report.changed_since}" if report.changed_since else "All files"
+    table = Table(title=title, title_justify="left", title_style="bold", box=None, pad_edge=False, header_style="dim")
+    for column in ("File", "Lines", "Tests", "First", "Kept", "Δ", "Status"):
+        table.add_column(column, justify="left" if column in ("File", "Lines", "Status") else "right")
+    statuses = {"completed": "[green]completed[/]", "failed": "[red]failed[/]", "cancelled": "[yellow]cancelled[/]"}
+    for result in report.files:
+        tests = "—" if result.tests_kept is None else f"{result.tests_first or 0} → {result.tests_kept}"
+        delta = (
+            format_delta(result.score_kept - result.score_first)
+            if result.score_first is not None and result.score_kept is not None
+            else "—"
+        )
+        table.add_row(
+            escape(result.source_file),
+            format_ranges(result.mutate_lines) if result.mutate_lines else "—" if result.status == "skipped" else "all",
+            tests,
+            format_score(result.score_first),
+            format_score(result.score_kept),
+            delta,
+            statuses.get(result.status, f"[dim]{result.status}[/]"),
+        )
+    totals = report.totals
+    if totals.files:
+        delta = (
+            format_delta(totals.score_kept - totals.score_first)
+            if totals.score_first is not None and totals.score_kept is not None
+            else "—"
+        )
+        table.add_section()
+        table.add_row(
+            f"[bold]Combined ({totals.files} {'file' if totals.files == 1 else 'files'})[/]",
+            "",
+            "",
+            f"[bold]{format_score(totals.score_first)}[/]",
+            f"[bold]{format_score(totals.score_kept)}[/]",
+            f"[bold]{delta}[/]",
+            "",
+        )
+    console.print(table)
+    if totals.files:
+        console.print(
+            "[dim]First: the first tests measured (one-shot AI, or the existing tests with --no-generate). "
+            "Combined: every mutant of the files scored in both columns.[/]"
+        )
 
 
 def render_run_list(reports: list[tuple[RunReport, Path]], console: Console) -> None:

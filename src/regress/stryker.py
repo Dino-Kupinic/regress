@@ -14,7 +14,7 @@ from regress.project import Project
 def stryker_config(project: Project, report_path: Path, temp_dir: Path) -> dict:
     return {
         "testRunner": "vitest",
-        "mutate": [project.source_rel],
+        "mutate": project.mutate_patterns,
         # Only the target test file counts, so scores reflect what that file alone can detect.
         "testFiles": [project.test_rel],
         "coverageAnalysis": "perTest",
