@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v0.6.0 (2026-10-04)
+
+### Documentation
+
+- Explain prices, estimates, budgets and run costs
+  ([`a840935`](https://github.com/Dino-Kupinic/regress/commit/a84093522a49d6bbbb28a483217ec8458fd722c4))
+
+### Features
+
+- Estimate costs, enforce a budget per run, and report what runs cost
+  ([`722fb4c`](https://github.com/Dino-Kupinic/regress/commit/722fb4c54336680f124f9df29d8d778504271159))
+
+- **web**: Show cost estimates, budgets and what runs cost
+  ([`6e93078`](https://github.com/Dino-Kupinic/regress/commit/6e93078349842e255f6bd784aef55d5498a151ff))
+
+
 ## v0.5.0 (2026-10-04)
 
 ### Bug Fixes
