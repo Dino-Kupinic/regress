@@ -1,6 +1,6 @@
 [project]
 name = "regress"
-version = "0.1.0"
+version = "0.2.0"
 description = "Improve AI-generated tests using mutation testing as an objective feedback loop."
 authors = [
     { name = "Dino-Kupinic", email = "dinokupinic2006@gmail.com" }
