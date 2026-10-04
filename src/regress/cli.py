@@ -15,6 +15,7 @@ from rich.table import Table
 from regress.batch import Target, resolve_targets, run_batch
 from regress.catalog import load_catalog
 from regress.changes import code_ranges, format_ranges
+from regress.check import render_markdown, run_check
 from regress.config import (
     CONFIG_FILE,
     CONFIG_TEMPLATE,
@@ -44,6 +45,7 @@ from regress.ui import (
     ConsoleReporter,
     choose_model,
     format_score,
+    render_check,
     render_models,
     render_report,
     render_run_list,
@@ -226,6 +228,68 @@ def _confirm_targets(root: Path, targets: list[Target], changed: str | None) -> 
     if not typer.confirm("Run Regress on each of them?", default=True):
         raise typer.Exit(0)
     console.print()
+
+
+@app.command()
+def check(
+    sources: Annotated[
+        list[Path] | None,
+        typer.Argument(
+            help="Source files or directories to check. With --changed, defaults to the current directory.",
+            metavar="SOURCE",
+            show_default=False,
+        ),
+    ] = None,
+    changed: Annotated[
+        str | None,
+        typer.Option("--changed", metavar="REF", help="Only source files changed since this git ref, and their lines."),
+    ] = None,
+    fail_under: Annotated[
+        float | None,
+        typer.Option(
+            min=0, max=100, help="Exit with code 1 when the combined mutation score is below this percentage."
+        ),
+    ] = None,
+    as_json: Annotated[bool, typer.Option("--json", help="Print the check report as JSON, and nothing else.")] = False,
+    markdown: Annotated[
+        Path | None, typer.Option(help="Also write a pull request comment in Markdown to this file.")
+    ] = None,
+    mutants: Annotated[int, typer.Option(min=0, help="Surviving mutants to list per file.")] = 5,
+    runner: RunnerOption = None,
+) -> None:
+    """Mutation-test the existing tests, without the model. A quality gate for CI."""
+    if not sources and changed is None:
+        _fail(ProjectError("Give a source file or directory to check, or --changed <ref> for changed files."))
+    paths = sources or [Path.cwd()]
+    try:
+        root, targets = resolve_targets(paths, changed)
+        settings = load_settings(root, runner=runner, fail_under=fail_under)
+        if not targets and changed is None:
+            raise ProjectError(f"No source files to check in {', '.join(escape(str(p)) for p in paths)}.")
+        result, directory = run_check(
+            root,
+            targets,
+            settings.runner,
+            None if as_json else ConsoleReporter(console),
+            changed_since=changed,
+            fail_under=settings.fail_under,
+            max_survivors=max(mutants, 10),
+            vitest_timeout=settings.vitest_timeout,
+            stryker_timeout=settings.stryker_timeout,
+        )
+        if markdown is not None:
+            atomic_write_text(markdown.expanduser().resolve(), render_markdown(result, mutants))
+        if as_json:
+            typer.echo(result.model_dump_json(indent=2))
+        else:
+            render_check(result, directory, console, mutants)
+        if not result.passed:
+            raise typer.Exit(1)
+    except RegressError as error:
+        _fail(error)
+    except KeyboardInterrupt:
+        err_console.print("\n[yellow]Interrupted.[/]")
+        raise typer.Exit(130) from None
 
 
 @app.command()

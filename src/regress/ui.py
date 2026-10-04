@@ -22,6 +22,7 @@ from regress.mutants import short_description
 if TYPE_CHECKING:
     from regress.batch import BatchReport, FileResult
     from regress.catalog import Catalog
+    from regress.check import CheckReport
     from regress.config import Settings
     from regress.project import Project
 
@@ -394,6 +395,51 @@ def render_batch(report: BatchReport, console: Console) -> None:
             "[dim]First: the first tests measured (one-shot AI, or the existing tests with --no-generate). "
             "Combined: every mutant of the files scored in both columns.[/]"
         )
+
+
+def render_check(report: CheckReport, directory: Path, console: Console, show_mutants: int = 5) -> None:
+    """The result of `regress check`: a score per file, surviving mutants, and the gate's verdict."""
+    if not report.files:
+        since = f" since {report.changed_since}" if report.changed_since else ""
+        console.print(f"No source files changed{since}; nothing to check.")
+        return
+    table = Table(box=None, pad_edge=False, header_style="dim")
+    for column in ("File", "Lines", "Tests", "Killed", "Survived", "No cov.", "Score", ""):
+        table.add_column(column, justify="left" if column in ("File", "Lines", "") else "right")
+    notes = {"no-tests": "[yellow]no tests[/]", "skipped": "[dim]skipped[/]", "failed": "[red]error[/]"}
+    for f in report.files:
+        scored = f.status == "scored"
+        table.add_row(
+            escape(f.source_file),
+            format_ranges(f.mutate_lines) if f.mutate_lines else "—" if f.status == "skipped" else "all",
+            str(f.tests) if scored else "—",
+            str(f.detected) if scored else "—",
+            str(f.survived) if scored else "—",
+            str(f.no_coverage) if scored else "—",
+            f"[{score_style(f.score)}]{format_score(f.score)}[/]" if f.score is not None else "—",
+            notes.get(f.status, ""),
+        )
+    console.print(table)
+    for f in report.files:
+        if f.status in ("failed", "no-tests", "skipped") and f.error:
+            style = "red" if f.status == "failed" else "yellow" if f.status == "no-tests" else "dim"
+            console.print(f"[{style}]{escape(f.source_file)}: {escape(f.error)}[/]")
+    survivors = [(f, s) for f in report.files for s in f.survivors[:show_mutants]]
+    if survivors:
+        console.print("\n[bold]Surviving mutants[/]")
+        for f, s in survivors:
+            where = f"{f.source_file}:{s.line}"
+            console.print(
+                f"  [dim]{escape(where):<22}[/] {escape(s.mutator):<22} {escape(s.original)}  →  {escape(s.mutated)}"
+            )
+    score = report.score
+    console.print(f"\n[bold]Combined score[/] {format_score(score)}", end="")
+    if report.fail_under is not None:
+        verdict = "[green]✓ passed[/]" if report.passed else "[red]✗ failed[/]"
+        console.print(f" [dim](threshold {report.fail_under:g}%)[/] {verdict}")
+    else:
+        console.print(" [red]✗ failed[/]" if not report.passed else "")
+    console.print(f"[dim]Saved to {escape(_display_path(directory))}[/]")
 
 
 def render_run_list(reports: list[tuple[RunReport, Path]], console: Console) -> None:

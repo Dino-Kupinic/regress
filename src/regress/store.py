@@ -11,6 +11,9 @@ from regress.models import RunReport
 
 if TYPE_CHECKING:
     from regress.batch import BatchReport
+    from regress.check import CheckReport
+
+CHECK_FILE = "check.json"
 
 REPORT_FILE = "report.json"
 
@@ -68,6 +71,26 @@ class RunStore:
             suffix += 1
             batch_id = f"{stamp}-batch-{suffix}"
         return batch_id
+
+    def create_check_dir(self) -> Path:
+        """A fresh directory for a `regress check` run's report and tool artifacts."""
+        base = self.root / ".regress" / "checks"
+        regress_dir(self.root)
+        _check_artifact_path(self.root, base)
+        base.mkdir(exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        directory, suffix = base / f"{stamp}-check", 1
+        while True:
+            try:
+                directory.mkdir()
+                return directory
+            except FileExistsError:
+                suffix += 1
+                directory = base / f"{stamp}-check-{suffix}"
+
+    def save_check(self, report: CheckReport, directory: Path) -> None:
+        _check_artifact_path(self.root, directory)
+        atomic_write_text(directory / CHECK_FILE, report.model_dump_json(indent=2))
 
     def batch_path(self, batch_id: str) -> Path:
         return self.root / ".regress" / "batches" / f"{batch_id}.json"
