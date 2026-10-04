@@ -17,7 +17,7 @@ It supports TypeScript and JavaScript projects with **Vitest 2–4**, run throug
 
 ## Ground rules
 
-- **Runs cost money.** `regress run` and `regress eval` (without `--oracle`) call the configured provider's API on the user's key. Start a run only when the user asked for one. Ask before running Regress over several files.
+- **Runs cost money.** `regress run` and `regress eval` (without `--oracle`) call the configured provider's API on the user's key. Start a run only when the user asked for one. Ask before running Regress over several files. Regress prints an estimate before it starts ("Estimated cost about $…, at most $…"): pass it on, and when the user names a limit, pass `--max-cost USD` so the run stops before going past it.
 - **`regress check` is free.** It mutation-tests the existing tests without the model and needs no API key. Use it to measure a file before suggesting a paid run (`regress check src/cart.ts`), or to see which mutants survive (`--json`).
 - **Runs execute model-written test code** on this machine, as any test an assistant writes would.
 - **Regress rewrites the test file.** A run that fails or is interrupted restores the original file. A run that completes leaves the kept version in place, uncommitted. Check `git status` first, so the diff you show afterwards is only Regress's.

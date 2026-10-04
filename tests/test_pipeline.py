@@ -235,3 +235,60 @@ def test_multi_file_run_mutates_only_the_changed_lines(root):
     assert cart.score_first < cart.score_kept
     assert report.totals.files == 1
     assert (root / "src/slugify.ts").read_text() == (EXAMPLES / "src/slugify.ts").read_text()
+
+
+def test_a_budget_stops_before_the_call_that_would_exceed_it(root):
+    from regress.pricing import Price, next_call_cost
+    from regress.prompts import INSTRUCTIONS, PromptContext, generate_prompt
+
+    project = load_project(root / "src/cart.ts")
+    price = Price(input=1000.0, output=0.0)  # $0.001 per input token; ScriptedLLM reports 100 per call
+    generation = next_call_cost(price, INSTRUCTIONS + generate_prompt(PromptContext.from_project(project), BASELINE), 0)
+    # Enough for the generation call (estimated up front) but not for the improvement prompt after it.
+    budget = generation + 0.1 + 0.01
+    llm = ScriptedLLM(ONE_SHOT, ORACLE)
+
+    report = Pipeline(project, llm, RunOptions(price=price, max_cost=budget)).run()
+
+    assert len(llm.prompts) == 1  # the improvement call was never made
+    assert report.status == "completed" and report.kept_stage == "Generated tests"
+    assert "budget" in report.stop_reason and report.cost_usd == pytest.approx(0.1)
+    assert (report.price, report.max_cost) == (price, budget)
+    assert project.test_file.read_text() == ONE_SHOT
+
+
+def test_a_budget_too_small_for_the_first_call_fails_the_run_without_calling(root):
+    from regress.pricing import Price
+
+    llm = ScriptedLLM(ONE_SHOT)
+    project = load_project(root / "src/cart.ts")
+    with pytest.raises(RegressError, match="budget of \\$0.0001"):
+        Pipeline(project, llm, RunOptions(price=Price(input=10.0, output=50.0), max_cost=0.0001)).run()
+    assert llm.prompts == []
+    assert project.test_file.read_text() == BASELINE
+
+
+def test_cli_run_shows_the_estimate_and_what_the_run_cost(root, monkeypatch):
+    import regress.cli as cli
+
+    llm = ScriptedLLM(ONE_SHOT, ORACLE)
+    llm.model = "gpt-6-luna"
+
+    class Client:
+        def __init__(self, *args, **kwargs) -> None: ...
+        def __enter__(self):
+            return llm
+
+        def __exit__(self, *exc) -> None: ...
+
+    monkeypatch.setattr(cli, "create_llm", Client)
+    monkeypatch.setattr(cli, "require_api_key", lambda *args, **kwargs: None)
+    monkeypatch.chdir(root)
+
+    result = CliRunner().invoke(app, ["run", "src/cart.ts", "--yes", "--baseline", "--max-cost", "0.05"])
+
+    assert result.exit_code == 0, result.output
+    assert "Estimated cost" in result.output and "gpt-6-luna: $0.1 in / $0.5 out" in result.output
+    assert "Budget per run    $0.05" in result.output
+    # ScriptedLLM reports 100 input and 50 output tokens per call: 2 calls at gpt-6-luna's price.
+    assert "Cost $0.0001 of $0.05 · 2 model calls" in result.output

@@ -10,7 +10,9 @@ from fastapi import HTTPException
 
 from regress.api.jobs import RunManager
 from regress.api.schemas import (
+    CostEstimate,
     FileContent,
+    FileEstimate,
     InitResult,
     PackageStatus,
     ProjectInfo,
@@ -21,7 +23,9 @@ from regress.api.schemas import (
 )
 from regress.config import CONFIG_FILE, CONFIG_TEMPLATE, Settings, load_settings, user_config_path, user_settings
 from regress.errors import ProjectError, ToolError
+from regress.estimates import estimate_project, run_options, total
 from regress.files import atomic_write_text
+from regress.pricing import PRICES_AS_OF, run_price
 from regress.process import run_command
 from regress.project import (
     MAX_FILE_BYTES,
@@ -34,6 +38,7 @@ from regress.project import (
     import_specifier,
     install_command,
     is_test_file,
+    load_project,
     package_version,
     planned_installs,
     source_files,
@@ -66,7 +71,7 @@ def project_info(manager: RunManager) -> ProjectInfo:
     api_key_set = missing is None
     if manager.needs_api_key and missing:
         problems.append(
-            f"{missing.removesuffix(' Export it or add it to a .env file.')}. "
+            f"{missing.removesuffix(' Export it or add it to a .env file.')} "
             "Add it to the environment or a .env file and restart the server."
         )
     if settings.provider == "openai-compatible" and not (settings.base_url or os.environ.get("OPENAI_BASE_URL")):
@@ -184,3 +189,55 @@ def _package_name(root: Path) -> str:
     except (OSError, ValueError, AttributeError):
         name = None
     return name if isinstance(name, str) and name else root.name
+
+
+def cost_estimate(
+    manager: RunManager,
+    sources: list[str],
+    *,
+    model: str | None = None,
+    rounds: int | None = None,
+    generate: bool = True,
+    max_cost: float | None = None,
+    tests: dict[str, str] | None = None,
+) -> CostEstimate:
+    """What runs on these files would cost with the configured (or given) model. Needs no API key."""
+    settings = load_settings(manager.root, rounds=rounds, model=model, max_cost=max_cost)
+    if settings.model is None:
+        raise ProjectError(f"No model chosen for provider {settings.provider}: pass model, or set one in regress.toml.")
+    price = run_price(settings)
+    options = run_options(settings.model_copy(update={"max_cost": None}), settings.model, generate=generate)
+    files = []
+    for relative in dict.fromkeys(sources):
+        test = (tests or {}).get(relative)
+        project = load_project(
+            manager.project_path(relative), manager.project_path(test) if test else None, settings.runner
+        )
+        if project.root != manager.root:
+            raise ProjectError(f"{relative} is not in this project.")
+        files.append(estimate_project(project, options, settings.model, price, settings.llm_max_output_tokens))
+    summed = total(files)
+    assert summed is not None
+    return CostEstimate(
+        model=settings.model,
+        provider=settings.provider,
+        price=price,
+        prices_as_of=PRICES_AS_OF,
+        max_cost=settings.max_cost,
+        files=[
+            FileEstimate(
+                source_file=f.source_file,
+                input_tokens=f.estimate.input_tokens,
+                output_tokens=f.estimate.output_tokens,
+                expected_usd=f.estimate.expected_usd,
+                max_usd=f.estimate.max_usd,
+            )
+            for f in files
+        ],
+        calls=summed.calls,
+        max_calls=summed.max_calls,
+        input_tokens=summed.input_tokens,
+        output_tokens=summed.output_tokens,
+        expected_usd=summed.expected_usd,
+        max_usd=summed.max_usd,
+    )

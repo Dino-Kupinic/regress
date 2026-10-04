@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from regress.api.jobs import RunManager, _interrupt, _watch_server
 from regress.evaluation import BugSuite, EvalResult, load_suites
@@ -40,6 +40,7 @@ def evaluation_worker(server_pid: int, lock_descriptor: int | None = None) -> No
 
 class EvalRequest(BaseModel):
     mode: Literal["oracle", "full"]
+    max_cost: float | None = Field(default=None, gt=0, le=10_000, description="Budget in USD per module run.")
 
 
 class EvalJob(BaseModel):
@@ -133,7 +134,7 @@ class EvaluationManager:
                     return
                 self._reap()
 
-    def start(self, mode: Literal["oracle", "full"]) -> EvalJob:
+    def start(self, mode: Literal["oracle", "full"], max_cost: float | None = None) -> EvalJob:
         with self._lock:
             if self._closed:
                 raise HTTPException(503, "Regress is shutting down.")
@@ -152,6 +153,8 @@ class EvaluationManager:
             ]
             if mode == "oracle":
                 command.append("--oracle")
+            elif max_cost is not None:
+                command += ["--max-cost", repr(float(max_cost))]
             try:
                 if not self.suites():
                     raise HTTPException(400, "This project has no hidden-bugs/ suites to evaluate.")

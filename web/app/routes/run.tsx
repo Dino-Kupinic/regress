@@ -112,6 +112,7 @@ import {
   pageTitle,
   percent,
   signedPoints,
+  usd,
 } from "~/lib/utils";
 
 export async function clientLoader({ params }: { params: { runId?: string } }) {
@@ -212,6 +213,13 @@ export default function RunPage() {
             </Meta>
             <Meta label="Model">{run.summary.model}</Meta>
             <Meta label="Stages">{measured.length}</Meta>
+            {run.report.cost_usd != null && (
+              <Meta label="Cost">
+                {usd(run.report.cost_usd)}
+                {run.report.max_cost != null &&
+                  ` of ${usd(run.report.max_cost)}`}
+              </Meta>
+            )}
             <Meta label="Duration">
               {duration(
                 run.live?.elapsed_seconds ?? run.summary.duration_seconds,
@@ -307,6 +315,16 @@ export default function RunPage() {
             <p className="font-mono text-xs whitespace-pre-wrap">
               {run.summary.error}
             </p>
+          </AlertDescription>
+        </Alert>
+      )}
+      {run.report.stop_reason && (
+        <Alert>
+          <CircleAlert />
+          <AlertTitle>Stopped early</AlertTitle>
+          <AlertDescription>
+            {run.report.stop_reason} The tests kept are the best valid ones so
+            far.
           </AlertDescription>
         </Alert>
       )}
@@ -1451,7 +1469,16 @@ function ModelLog({ run }: { run: RunDetail }) {
   }));
   return (
     <div className="flex flex-col gap-4">
-      <div className="grid gap-4 sm:grid-cols-3">
+      <div className="grid gap-4 sm:grid-cols-4">
+        <UsageStat
+          label="Cost"
+          value={usd(run.report.cost_usd)}
+          detail={
+            run.report.price
+              ? `$${run.report.price.input}/$${run.report.price.output} per 1M tokens`
+              : "No price known for this model"
+          }
+        />
         <UsageStat label="Model calls" value={usage.calls} />
         <UsageStat
           label="Tokens"

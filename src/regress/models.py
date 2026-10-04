@@ -6,6 +6,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, computed_field
 
+from regress.pricing import Price
+
 
 class TestStatus(StrEnum):
     __test__ = False  # not a pytest test class
@@ -160,13 +162,15 @@ class Stage(BaseModel):
 
 
 class TokenUsage(BaseModel):
-    input_tokens: int = 0
+    input_tokens: int = 0  # including cached_input_tokens
     output_tokens: int = 0
+    cached_input_tokens: int = 0
     calls: int = 0
 
-    def add(self, input_tokens: int, output_tokens: int) -> None:
+    def add(self, input_tokens: int, output_tokens: int, cached_input_tokens: int = 0) -> None:
         self.input_tokens += input_tokens
         self.output_tokens += output_tokens
+        self.cached_input_tokens += cached_input_tokens
         self.calls += 1
 
 
@@ -187,6 +191,12 @@ class RunReport(BaseModel):
     stages: list[Stage] = Field(default_factory=list)
     kept_stage: str | None = None
     usage: TokenUsage = Field(default_factory=TokenUsage)
+    # What the model calls cost in USD at `price`; None when the model's price isn't known.
+    cost_usd: float | None = None
+    price: Price | None = None
+    max_cost: float | None = None
+    # Why the run stopped short of its rounds, e.g. the budget: the tests kept are the best valid ones so far.
+    stop_reason: str | None = None
     duration_seconds: float = 0.0
 
     def stage(self, kind: StageKind) -> Stage | None:

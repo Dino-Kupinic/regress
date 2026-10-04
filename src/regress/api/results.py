@@ -53,6 +53,7 @@ def summarize(report: RunReport, active: bool = False) -> RunSummary:
         tests_after=kept.test_count if kept else None,
         active=active,
         batch_id=report.batch_id,
+        cost_usd=report.cost_usd,
     )
 
 

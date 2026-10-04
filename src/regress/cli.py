@@ -24,10 +24,13 @@ from regress.config import (
     user_config_path,
 )
 from regress.errors import ProjectError, RegressError, ToolError
+from regress.estimates import estimate_project, run_options
+from regress.estimates import total as total_estimate
 from regress.evaluation import COUNTING_NOTE, EvalResult, evaluate_oracles, evaluate_regress, load_suites
 from regress.files import atomic_write_text
 from regress.llm import create_llm, require_api_key
 from regress.pipeline import Pipeline, RunOptions
+from regress.pricing import format_usd
 from regress.process import run_command
 from regress.project import (
     REQUIRED_PACKAGES,
@@ -73,6 +76,15 @@ YesOption = Annotated[
     bool,
     typer.Option("--yes", "-y", help="Don't ask anything; use the default model."),
 ]
+MaxCostOption = Annotated[
+    float | None,
+    typer.Option(
+        "--max-cost",
+        min=0.0001,
+        metavar="USD",
+        help="Budget per run in USD: Regress stops before a model call would go past it. [default: max_cost]",
+    ),
+]
 
 
 def main() -> None:
@@ -103,7 +115,7 @@ def _pick_model(settings: Settings, yes: bool) -> str:
         return settings.model
     with console.status("[dim]Fetching available models...[/]"):
         catalog = _catalog(settings)
-    answer, remember = choose_model(console, catalog, settings.model)
+    answer, remember = choose_model(console, catalog, settings.model, prices=settings.prices)
     prefix, model = split_model(answer)
     if prefix is not None:
         settings.provider = prefix
@@ -170,6 +182,7 @@ def run(
         ),
     ] = True,
     runner: RunnerOption = None,
+    max_cost: MaxCostOption = None,
     verbose: Annotated[
         bool, typer.Option("--verbose", "-v", help="Show validation details and model summaries.")
     ] = False,
@@ -190,7 +203,7 @@ def run(
                 console.print(f"No source files changed since {escape(changed)} in {where}.")
                 return
             raise ProjectError(f"No source files to test in {where}.")
-        settings = load_settings(root, rounds=rounds, model=model, runner=runner)
+        settings = load_settings(root, rounds=rounds, model=model, runner=runner, max_cost=max_cost)
         if single and len(targets) == 1:
             target = targets[0]
             lines = code_ranges(target.source.read_text(encoding="utf-8"), target.lines) if target.lines else []
@@ -198,19 +211,13 @@ def run(
                 console.print("Only comments, imports or blank lines changed; nothing to test.")
                 return
             project = dataclasses.replace(load_project(target.source, test, settings.runner), mutate_lines=tuple(lines))
-        elif not yes and _interactive():
-            _confirm_targets(root, targets, changed)
         chosen = _pick_model(settings, yes)
         require_api_key(settings.provider, settings.api_key_env)
-        options = RunOptions(
-            rounds=settings.rounds,
-            max_repairs=settings.max_repairs,
-            max_mutants=settings.max_mutants,
-            measure_baseline=baseline,
-            generate=generate,
-            vitest_timeout=settings.vitest_timeout,
-            stryker_timeout=settings.stryker_timeout,
-        )
+        options = run_options(settings, chosen, measure_baseline=baseline, generate=generate)
+        projects = [project] if single and len(targets) == 1 else _loadable(targets, settings)
+        _show_estimate(settings, chosen, options, projects)
+        if not (single and len(targets) == 1) and not yes and _interactive():
+            _confirm_targets(root, targets, changed)
         with create_llm(settings, chosen) as llm:
             if single and len(targets) == 1:
                 Pipeline(project, llm, options, ConsoleReporter(console, verbose)).run()
@@ -225,6 +232,41 @@ def run(
     except KeyboardInterrupt:
         err_console.print("\n[yellow]Interrupted.[/] The test file was restored.")
         raise typer.Exit(130) from None
+
+
+def _loadable(targets: list[Target], settings: Settings) -> list:
+    """The projects of the targets that load, for the estimate; the others fail later, with their reason."""
+    projects = []
+    for target in targets:
+        try:
+            projects.append(load_project(target.source, None, settings.runner))
+        except RegressError:
+            continue
+    return projects
+
+
+def _show_estimate(settings: Settings, model: str, options: RunOptions, projects: list) -> None:
+    estimates = [estimate_project(p, options, model, options.price, settings.llm_max_output_tokens) for p in projects]
+    summed = total_estimate(estimates)
+    if summed is None:
+        return
+    files = f" for {len(projects)} files" if len(projects) > 1 else ""
+    price = options.price
+    if price is None or summed.expected_usd is None:
+        console.print(
+            f"[dim]Estimated usage{files}: about {summed.input_tokens:,} input and {summed.output_tokens:,} "
+            f'output tokens. No price is known for {escape(model)}; add [prices."{escape(model)}"] to '
+            "regress.toml to see costs.[/]\n"
+        )
+        return
+    rate = f"{escape(model)}: ${price.input:g} in / ${price.output:g} out per 1M tokens"
+    console.print(
+        f"{'Estimated cost':<18}[bold]about {format_usd(summed.expected_usd)}[/], at most "
+        f"{format_usd(summed.max_usd)}{files} [dim]({rate})[/]"
+    )
+    if options.max_cost is not None:
+        console.print(f"[dim]{'Budget per run':<18}{format_usd(options.max_cost)}[/]")
+    console.print()
 
 
 def _confirm_targets(root: Path, targets: list[Target], changed: str | None) -> None:
@@ -480,15 +522,16 @@ def eval_command(
         typer.Option("--oracle", help="Validate hidden bugs with the reference tests instead of running the model."),
     ] = False,
     rounds: Annotated[int | None, typer.Option(min=0, max=5, help="Improvement rounds per module.")] = None,
-    model: Annotated[str | None, typer.Option(help="OpenAI model. Skips the model question.")] = None,
+    model: Annotated[str | None, typer.Option(help="Model, or provider:model. Skips the model question.")] = None,
     runner: RunnerOption = None,
+    max_cost: MaxCostOption = None,
     verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
     yes: YesOption = False,
 ) -> None:
     """Compare existing tests, one-shot AI tests, and Regress on example modules with hidden bugs."""
     try:
         examples = examples.expanduser().resolve()
-        settings = load_settings(examples, rounds=rounds, model=model, runner=runner)
+        settings = load_settings(examples, rounds=rounds, model=model, runner=runner, max_cost=max_cost)
         suites = load_suites(examples, modules)
 
         def announce(suite) -> None:
@@ -500,13 +543,9 @@ def eval_command(
         else:
             chosen = _pick_model(settings, yes)
             require_api_key(settings.provider, settings.api_key_env)
-            options = RunOptions(
-                rounds=settings.rounds,
-                max_repairs=settings.max_repairs,
-                max_mutants=settings.max_mutants,
-                vitest_timeout=settings.vitest_timeout,
-                stryker_timeout=settings.stryker_timeout,
-            )
+            options = run_options(settings, chosen, measure_baseline=True, generate=True)
+            projects = [load_project(examples / s.source, examples / s.test, settings.runner) for s in suites]
+            _show_estimate(settings, chosen, options, projects)
             result = evaluate_regress(
                 examples,
                 suites,
@@ -534,6 +573,9 @@ def _render_eval(result: EvalResult) -> None:
     for label in labels:
         table.add_column(f"{label}\nscore", justify="right")
         table.add_column("bugs", justify="right")
+    priced = result.mode == "regress" and any(m.cost_usd is not None for m in result.modules)
+    if priced:
+        table.add_column("cost", justify="right")
     for module in result.modules:
         cells: list[str] = []
         for label in labels:
@@ -541,11 +583,15 @@ def _render_eval(result: EvalResult) -> None:
             cells += (
                 ["—", "—"] if stage is None else [format_score(stage.score), f"{len(stage.caught)}/{stage.bugs_total}"]
             )
+        if priced:
+            cells.append(format_usd(module.cost_usd))
         marker = " [red](error)[/]" if module.error else " [yellow]*[/]" if module.note else ""
         table.add_row(escape(module.module) + marker, *cells)
     totals: list[str] = []
     for total in result.totals:
         totals += [f"[bold]{format_score(total.score)}[/]", f"[bold]{total.caught}/{total.bugs_total}[/]"]
+    if priced:
+        totals.append(f"[bold]{format_usd(result.cost.usd)}[/]" if result.cost else "—")
     table.add_row(f"[bold]{result.totals_label}[/]", *totals, end_section=True)
     console.print()
     console.print(table)
@@ -558,6 +604,12 @@ def _render_eval(result: EvalResult) -> None:
             if result.mode == "oracle" and stage.label == "Oracle" and stage.missed:
                 missed = ", ".join(stage.missed)
                 console.print(f"[yellow]{escape(module.module)}: oracle misses hidden bug(s) {escape(missed)}[/]")
+    if result.cost:
+        console.print(
+            f"Cost {format_usd(result.cost.usd)} · per mutant the Regress tests detect "
+            f"{format_usd(result.cost.per_mutant_killed)} · per hidden bug caught "
+            f"{format_usd(result.cost.per_bug_caught)}"
+        )
     if len(result.counted_modules) < len(result.modules):
         console.print(f"[dim]{COUNTING_NOTE}[/]")
     if result.output_dir:

@@ -339,7 +339,7 @@ def picker_calls(monkeypatch):
     monkeypatch.setattr(cli, "_interactive", lambda: True)
     monkeypatch.setattr(cli, "load_catalog", lambda *a, **k: CATALOG)
 
-    def fake_choose(console, catalog, default):
+    def fake_choose(console, catalog, default, **options):
         calls.append(default)
         return "gpt-6-sol", True
 

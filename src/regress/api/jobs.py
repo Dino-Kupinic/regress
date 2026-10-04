@@ -37,6 +37,7 @@ from regress.api.schemas import BatchDetail, BatchRequest, EventType, LiveState,
 from regress.batch import BatchReport, FileResult, summarize_run
 from regress.config import Settings, load_settings
 from regress.errors import CandidateRejected, ProjectError, RegressError, ToolError
+from regress.estimates import run_options
 from regress.files import atomic_write_bytes, atomic_write_text
 from regress.llm import LLM, create_llm, require_api_key
 from regress.models import RunReport, Stage
@@ -597,6 +598,7 @@ class Batch:
                             ("cancelled" if run.status == "cancelled" else "failed"),
                             run.error,
                         )
+                    result.cost_usd = run.cost_usd  # a failed or cancelled run still spent something
                 self._save()
         except Exception:
             log.exception("Batch %s stopped unexpectedly", self.id)
@@ -863,22 +865,16 @@ class RunManager:
         return self._launch(project, settings, options, release)
 
     def _run_settings(self, request: RunRequest | BatchRequest) -> tuple[Settings, RunOptions]:
-        settings = load_settings(self.root, rounds=request.rounds, model=request.model, runner=request.runner)
+        settings = load_settings(
+            self.root, rounds=request.rounds, model=request.model, runner=request.runner, max_cost=request.max_cost
+        )
         if settings.model is None:
             raise ProjectError(
                 f"No model chosen for provider {settings.provider}: pass model, or set one in regress.toml."
             )
         if self.needs_api_key:
             require_api_key(settings.provider, settings.api_key_env)
-        options = RunOptions(
-            rounds=settings.rounds,
-            max_repairs=settings.max_repairs,
-            max_mutants=settings.max_mutants,
-            measure_baseline=request.baseline,
-            generate=request.generate,
-            vitest_timeout=settings.vitest_timeout,
-            stryker_timeout=settings.stryker_timeout,
-        )
+        options = run_options(settings, settings.model, measure_baseline=request.baseline, generate=request.generate)
         return settings, options
 
     def _project(self, relative: str, test: str | None, settings: Settings) -> Project:

@@ -169,7 +169,30 @@ export default function SettingsPage() {
   });
   const update = <K extends keyof Settings>(key: K, value: Settings[K]) =>
     setDraft((old) => ({ ...old, [key]: value }));
-  const canSave = changed.length > 0 && !invalid.length && !save.isPending;
+  // Typed text, so "0." survives until the next digit; follows the draft when it changes elsewhere (Discard).
+  const [budgetText, setBudgetText] = useState(
+    draft.max_cost == null ? "" : String(draft.max_cost),
+  );
+  const parseBudget = (text: string) =>
+    text.trim() === "" ? null : Number(text);
+  useEffect(() => {
+    setBudgetText((text) =>
+      parseBudget(text) === draft.max_cost
+        ? text
+        : draft.max_cost == null
+          ? ""
+          : String(draft.max_cost),
+    );
+  }, [draft.max_cost]);
+  const budgetInvalid =
+    draft.max_cost !== null &&
+    !(
+      Number.isFinite(draft.max_cost) &&
+      draft.max_cost > 0 &&
+      draft.max_cost <= 10_000
+    );
+  const canSave =
+    changed.length > 0 && !invalid.length && !budgetInvalid && !save.isPending;
   // Ask before leaving with unsaved changes, in the app and on reload.
   const blocker = useBlocker(changed.length > 0 && !save.isPending);
   useEffect(() => {
@@ -379,6 +402,24 @@ export default function SettingsPage() {
                 </Field>
               ))}
             </FieldGroup>
+            <Field className="max-w-xs" data-invalid={budgetInvalid}>
+              <FieldLabel htmlFor="max-cost">Budget per run (USD)</FieldLabel>
+              <Input
+                id="max-cost"
+                inputMode="decimal"
+                placeholder="No budget"
+                aria-invalid={budgetInvalid}
+                value={budgetText}
+                onChange={(event) => {
+                  setBudgetText(event.target.value);
+                  update("max_cost", parseBudget(event.target.value));
+                }}
+              />
+              <FieldDescription>
+                Regress stops before a model call would go past it and keeps the
+                best tests so far. Needs a known price for the model.
+              </FieldDescription>
+            </Field>
             <Field className="max-w-xs">
               <FieldLabel htmlFor="runner">Runner</FieldLabel>
               <Select
@@ -418,8 +459,8 @@ export default function SettingsPage() {
                   : "All changes saved"}
               </CardTitle>
               <CardDescription>
-                {invalid.length
-                  ? `Fix ${invalid.map((item) => item.label.toLowerCase()).join(", ")} before saving.`
+                {invalid.length || budgetInvalid
+                  ? `Fix ${[...invalid.map((item) => item.label), ...(budgetInvalid ? ["Budget per run"] : [])].map((label) => label.toLowerCase()).join(", ")} before saving.`
                   : changed.length
                     ? changed
                         .map(([key]) => key.replaceAll("_", " "))

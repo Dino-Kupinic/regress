@@ -20,7 +20,9 @@ from regress.api.schemas import (
     Artifact,
     BatchDetail,
     BatchRequest,
+    CostEstimate,
     ErrorBody,
+    EstimateRequest,
     FileContent,
     Health,
     InitResult,
@@ -84,11 +86,25 @@ def get_evaluation_job(evaluations: Evaluations) -> EvalJob:
     return evaluations.job()
 
 
+@router.get("/evaluations/estimate", tags=["evaluation"])
+def estimate_evaluation(evaluations: Evaluations, manager: Manager) -> CostEstimate:
+    """What a full evaluation would cost with the configured model: one run with a baseline per module."""
+    suites = evaluations.suites()
+    if not suites:
+        raise HTTPException(400, "This project has no hidden-bugs/ suites to evaluate.")
+    try:
+        return projects.cost_estimate(
+            manager, [s.source for s in suites], tests={s.source: s.test for s in suites}, generate=True
+        )
+    except ProjectError as error:
+        raise HTTPException(400, str(error)) from error
+
+
 @router.post("/evaluations", status_code=202, tags=["evaluation"])
 def start_evaluation(request: EvalRequest, evaluations: Evaluations, manager: Manager) -> EvalJob:
     if manager.active():
         raise HTTPException(409, "A run is in progress. Wait for it before starting an evaluation.")
-    return evaluations.start(request.mode)
+    return evaluations.start(request.mode, max_cost=request.max_cost)
 
 
 def _run(run_id: str, manager: Manager) -> RunHandle:
@@ -258,6 +274,26 @@ def start_run(request: RunRequest, manager: Manager, response: Response, evaluat
     job = manager.start(request)
     response.headers["Location"] = f"/api/runs/{job.id}"
     return _detail(manager.lookup(job.id))
+
+
+@router.post("/estimate", tags=["runs"])
+def estimate_runs(request: EstimateRequest, manager: Manager) -> CostEstimate:
+    """What runs on these files would cost, before starting them. Rough: no model is called, no key needed.
+
+    `expected_usd` assumes each stage's first proposal is accepted; `max_usd` that every repair attempt
+    is used and each response fills `llm_max_output_tokens`.
+    """
+    try:
+        return projects.cost_estimate(
+            manager,
+            request.sources,
+            model=request.model,
+            rounds=request.rounds,
+            generate=request.generate,
+            max_cost=request.max_cost,
+        )
+    except ProjectError as error:
+        raise HTTPException(400, str(error)) from error
 
 
 @router.post("/batches", status_code=202, tags=["runs"])

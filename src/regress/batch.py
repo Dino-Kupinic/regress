@@ -77,6 +77,7 @@ class FileResult(BaseModel):
     score_first: float | None = None
     score_kept: float | None = None
     # Detected and valid mutants (killed + timeout, and those plus survived + no coverage), for combined scores.
+    cost_usd: float | None = None
     detected_first: int = 0
     detected_kept: int = 0
     valid_mutants: int = 0
@@ -201,6 +202,7 @@ def _run_one(
 def summarize_run(run: RunReport, result: FileResult) -> None:
     """Fill in a completed file's result from its run report."""
     result.status = "completed"
+    result.cost_usd = run.cost_usd
     first, kept = run.reference, run.kept
     if first is not None:
         result.tests_first, result.score_first = first.test_count, first.score

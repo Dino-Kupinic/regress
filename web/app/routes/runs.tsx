@@ -68,6 +68,7 @@ import {
   pageTitle,
   percent,
   signedPoints,
+  usd,
 } from "~/lib/utils";
 
 export const meta: MetaFunction = () => [{ title: pageTitle("Runs") }];
@@ -193,6 +194,7 @@ export default function Runs() {
                   <TableHead className="text-right">First</TableHead>
                   <TableHead className="text-right">Kept</TableHead>
                   <TableHead className="text-right">Change</TableHead>
+                  <TableHead className="text-right">Cost</TableHead>
                   <TableHead className="text-right">Duration</TableHead>
                   <TableHead>Started</TableHead>
                   <TableHead className="w-12">
@@ -247,6 +249,9 @@ export default function Runs() {
                     </TableCell>
                     <TableCell className="text-right text-muted-foreground tabular-nums">
                       {signedPoints(run.improvement)}
+                    </TableCell>
+                    <TableCell className="text-right text-muted-foreground tabular-nums">
+                      {usd(run.cost_usd)}
                     </TableCell>
                     <TableCell className="text-right text-muted-foreground tabular-nums">
                       {run.active ? "—" : duration(run.duration_seconds)}

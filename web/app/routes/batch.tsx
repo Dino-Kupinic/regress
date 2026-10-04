@@ -38,6 +38,7 @@ import {
   pageTitle,
   percent,
   signedPoints,
+  usd,
 } from "~/lib/utils";
 
 export async function clientLoader({
@@ -89,6 +90,10 @@ export default function BatchPage() {
   const running = batch.files.find((file) => file.status === "running");
   const command = `regress run ${batch.files.map((file) => file.source_file).join(" ")} --yes`;
   const { combined } = batch;
+  const costs = batch.files.map((file) => file.cost_usd);
+  const spent = costs.some((value) => value != null)
+    ? costs.reduce<number>((sum, value) => sum + (value ?? 0), 0)
+    : null;
   return (
     <Page>
       <PageHeader
@@ -97,6 +102,7 @@ export default function BatchPage() {
           <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
             <span>{dateTime(batch.created_at)}</span>
             <span className="font-mono">{batch.model}</span>
+            {spent != null && <span>{usd(spent)} spent</span>}
             {!batch.active && <span>{duration(batch.duration_seconds)}</span>}
           </span>
         }
@@ -188,6 +194,7 @@ export default function BatchPage() {
               <TableHead className="text-right">First</TableHead>
               <TableHead className="text-right">Kept</TableHead>
               <TableHead className="text-right">Change</TableHead>
+              <TableHead className="text-right">Cost</TableHead>
               <TableHead className="pr-4">Status</TableHead>
             </TableRow>
           </TableHeader>
@@ -230,6 +237,9 @@ export default function BatchPage() {
                   {file.score_first !== null && file.score_kept !== null
                     ? signedPoints(file.score_kept - file.score_first)
                     : "—"}
+                </TableCell>
+                <TableCell className="text-right text-muted-foreground tabular-nums">
+                  {usd(file.cost_usd)}
                 </TableCell>
                 <TableCell className="pr-4">
                   <FileStatus status={file.status} />

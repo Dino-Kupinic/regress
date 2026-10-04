@@ -162,5 +162,11 @@ class AnthropicLLM(StreamingLLM):
         except pydantic.ValidationError as error:
             raise LLMError(f"The model returned no usable test file ({message.stop_reason}): {error}") from error
         usage = message.usage
-        cached = (usage.cache_read_input_tokens or 0) + (usage.cache_creation_input_tokens or 0)
-        return Completion(proposal=parsed, input_tokens=usage.input_tokens + cached, output_tokens=usage.output_tokens)
+        read = usage.cache_read_input_tokens or 0
+        written = usage.cache_creation_input_tokens or 0
+        return Completion(
+            proposal=parsed,
+            input_tokens=usage.input_tokens + read + written,
+            output_tokens=usage.output_tokens,
+            cached_input_tokens=read,
+        )
