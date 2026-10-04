@@ -74,6 +74,7 @@ def project_info(manager: RunManager) -> ProjectInfo:
     if settings.model is None:
         problems.append(f"No model is set for provider {settings.provider}. Set model in regress.toml.")
     active = manager.active()
+    batch = manager.active_batch()
     return ProjectInfo(
         root=str(root),
         name=_package_name(root),
@@ -86,6 +87,7 @@ def project_info(manager: RunManager) -> ProjectInfo:
         provider=settings.provider,
         api_key_name=key_env(settings.provider, settings.api_key_env),
         active_run=active.id if active else None,
+        active_batch=batch.id if batch else None,
     )
 
 

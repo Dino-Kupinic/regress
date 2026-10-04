@@ -18,6 +18,8 @@ from regress.api.evaluations import EvalJob, EvalRequest, EvaluationManager
 from regress.api.jobs import RunHandle, RunManager
 from regress.api.schemas import (
     Artifact,
+    BatchDetail,
+    BatchRequest,
     ErrorBody,
     FileContent,
     Health,
@@ -256,6 +258,39 @@ def start_run(request: RunRequest, manager: Manager, response: Response, evaluat
     job = manager.start(request)
     response.headers["Location"] = f"/api/runs/{job.id}"
     return _detail(manager.lookup(job.id))
+
+
+@router.post("/batches", status_code=202, tags=["runs"])
+def start_batch(request: BatchRequest, manager: Manager, response: Response, evaluations: Evaluations) -> BatchDetail:
+    """Run several source files one after another, like `regress run a.ts b.ts`. Returns at once.
+
+    Each file becomes an ordinary run (follow `current_run` like any other); the project stays reserved
+    until the last one is over, so other runs are refused with 409 meanwhile. A file that fails is
+    recorded and the rest still run; cancelling the batch, or the run in progress, stops it.
+    """
+    if evaluations.job().status == "running":
+        raise HTTPException(409, "An evaluation is in progress. Wait for it before starting a run.")
+    batch = manager.start_batch(request)
+    response.headers["Location"] = f"/api/batches/{batch.id}"
+    return batch.detail()
+
+
+@router.get("/batches", tags=["runs"])
+def list_batches(manager: Manager) -> list[BatchDetail]:
+    """Every multi-file run, newest first."""
+    return manager.batches()
+
+
+@router.get("/batches/{batch_id}", tags=["runs"])
+def get_batch(batch_id: str, manager: Manager) -> BatchDetail:
+    """A multi-file run: each file's status, scores and run ID, and the combined score."""
+    return manager.batch(batch_id)
+
+
+@router.post("/batches/{batch_id}/cancel", status_code=202, tags=["runs"])
+def cancel_batch(batch_id: str, manager: Manager) -> BatchDetail:
+    """Stop the run in progress (its test file is restored) and start no more files."""
+    return manager.cancel_batch(batch_id)
 
 
 @router.get("/runs/{run_id}", tags=["runs"])

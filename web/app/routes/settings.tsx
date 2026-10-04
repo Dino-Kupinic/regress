@@ -407,7 +407,7 @@ export default function SettingsPage() {
         <aside className="flex flex-col gap-4 lg:sticky lg:top-4">
           <Card
             className={cn(
-              "transition-shadow duration-300",
+              "@container/save transition-shadow duration-300",
               changed.length && "ring-foreground",
             )}
           >
@@ -436,18 +436,24 @@ export default function SettingsPage() {
                 </Alert>
               </CardContent>
             )}
-            <CardFooter className="justify-end gap-2">
+            {/* The aside can be 280px wide: stack the buttons full width until there is room for a row. */}
+            <CardFooter className="flex-col-reverse items-stretch gap-2 @[21rem]/save:flex-row @[21rem]/save:items-center @[21rem]/save:justify-end">
               <Button
                 variant="ghost"
+                className="@[21rem]/save:w-auto"
                 disabled={!changed.length}
                 onClick={() => setDraft(settings.effective)}
               >
                 Discard
               </Button>
-              <Button disabled={!canSave} onClick={() => save.mutate()}>
+              <Button
+                className="@[21rem]/save:w-auto"
+                disabled={!canSave}
+                onClick={() => save.mutate()}
+              >
                 {save.isPending && <Spinner data-icon="inline-start" />}
                 Save changes
-                <KbdGroup className="hidden sm:inline-flex">
+                <KbdGroup className="hidden @[21rem]/save:inline-flex">
                   <Kbd className="bg-primary-foreground/15 text-primary-foreground/80">
                     {mod}
                   </Kbd>

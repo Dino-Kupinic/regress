@@ -515,3 +515,47 @@ def test_the_event_stream_of_a_finished_run_replays_its_log_and_ends(client, pro
         body = response.read().decode()
     assert body.count("event: run-event") == 1 and "id: 2" in body and "Done" in body
     assert body.rstrip().splitlines()[-1].startswith("data: ") and "event: end" in body
+
+
+# --- multi-file runs -------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("body", "status", "detail"),
+    [
+        ({"sources": []}, 422, None),
+        ({"sources": ["src/math.ts", "src/missing.ts"]}, 400, "src/missing.ts"),
+        ({"sources": ["src/math.ts"], "generate": False}, 400, "none of these files has a test file"),
+    ],
+)
+def test_bad_batch_requests_are_refused_up_front(client, body, status, detail):
+    response = client.post("/api/batches", json=body)
+    assert response.status_code == status
+    if detail:
+        assert detail in response.json()["detail"]
+    assert client.get("/api/batches").json() == []
+    assert client.get("/api/project").json()["active_batch"] is None
+
+
+def test_unknown_batches_are_not_found(client):
+    assert client.get("/api/batches/nope").status_code == 404
+    assert client.get("/api/batches/..%2Fx").status_code == 404
+    assert client.post("/api/batches/nope/cancel").status_code == 409
+
+
+def test_an_interrupted_batch_is_marked_cancelled_on_startup(project):
+    from regress.batch import BatchReport, FileResult
+    from regress.store import RunStore
+
+    report = BatchReport(
+        id="20261004-120000-batch",
+        created_at="2026-10-04T12:00:00+00:00",
+        project_root=str(project),
+        model="m",
+        files=[FileResult(source_file="src/math.ts", status="running", run_id="r"), FileResult(source_file="b.ts")],
+    )
+    RunStore(project).save_batch(report)
+    with client_for(project) as client:
+        batch = client.get(f"/api/batches/{report.id}").json()
+    assert batch["status"] == "cancelled" and not batch["active"]
+    assert [f["status"] for f in batch["files"]] == ["failed", "pending"]

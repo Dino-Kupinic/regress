@@ -16,6 +16,8 @@ export type ProjectInfo = {
   /** The environment variable holding the provider's key; null when it needs none. */
   api_key_name: string | null;
   active_run: string | null;
+  /** The multi-file run in progress, if any. */
+  active_batch: string | null;
 };
 export type Provider = "openai" | "anthropic" | "openai-compatible";
 export const providerLabels: Record<Provider, string> = {
@@ -88,6 +90,8 @@ export type RunSummary = {
   tests_before: number;
   tests_after: number | null;
   active: boolean;
+  /** The multi-file run this run belongs to, if any. */
+  batch_id: string | null;
 };
 export type Mutant = {
   id: string;
@@ -178,6 +182,41 @@ export type RunRequest = {
   baseline?: boolean;
   generate?: boolean;
   runner?: Settings["runner"];
+};
+export type BatchRequest = Omit<RunRequest, "source" | "test"> & {
+  sources: string[];
+};
+export type BatchFile = {
+  source_file: string;
+  status:
+    | "pending"
+    | "running"
+    | "completed"
+    | "failed"
+    | "cancelled"
+    | "skipped";
+  run_id: string | null;
+  error: string | null;
+  tests_first: number | null;
+  tests_kept: number | null;
+  score_first: number | null;
+  score_kept: number | null;
+};
+export type BatchDetail = {
+  id: string;
+  created_at: string;
+  model: string;
+  status: RunSummary["status"];
+  files: BatchFile[];
+  duration_seconds: number;
+  combined: {
+    files: number;
+    score_first: number | null;
+    score_kept: number | null;
+  };
+  active: boolean;
+  /** The run in progress; follow it like any run. */
+  current_run: string | null;
 };
 export type StageDiff = {
   stage: number;
@@ -318,6 +357,18 @@ export const api = {
     request<RunDetail>("/runs", {
       method: "POST",
       body: JSON.stringify(payload),
+    }),
+  startBatch: (payload: BatchRequest) =>
+    request<BatchDetail>("/batches", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  batches: () => request<BatchDetail[]>("/batches"),
+  batch: (id: string) =>
+    request<BatchDetail>(`/batches/${encodeURIComponent(id)}`),
+  cancelBatch: (id: string) =>
+    request<BatchDetail>(`/batches/${encodeURIComponent(id)}/cancel`, {
+      method: "POST",
     }),
   cancelRun: (id: string) =>
     request<RunDetail>(`/runs/${encodeURIComponent(id)}/cancel`, {

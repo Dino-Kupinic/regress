@@ -30,6 +30,13 @@ const sections: Record<string, string> = {
 
 function crumbsFor(pathname: string): Crumb[] {
   const [section = "", id] = pathname.split("/").filter(Boolean);
+  if (section === "batches" && id) {
+    // A multi-file run has no list of its own; it belongs with the runs.
+    return [
+      { label: "Runs", to: "/runs" },
+      { label: decodeURIComponent(id), mono: true },
+    ];
+  }
   const label = sections[section] ?? "Not found";
   if (!id) return [{ label }];
   return [

@@ -21,16 +21,20 @@ The **Readiness** panel explains what prevents a run from starting. A missing pr
 
 Choose **New run** from the application or select a file on the dashboard.
 
-1. Search for and select a source file. Regress displays the test file it will extend or create.
+1. Search for and select one or more source files. With one file, Regress displays the test file it will extend or create; with several, how many of them already have tests. **Select all shown** selects the files in the list (the first 50 matches of a search), and a run takes at most 100 files.
 2. Choose a model or keep the configured default.
 3. Set **Rounds** to 0–5. This counts improvement rounds after the initial mutation run. The drawer starts at 1 each time it opens.
 4. Enable **Measure baseline** to mutation-test the existing tests before generation.
 5. Enable **Skip generation** to improve an existing test file directly.
-6. Check **Pre-flight**, then choose **Start run**.
+6. Check **Pre-flight**, then choose **Start run** (or **Run N files**).
 
-Baseline measurement and skipping generation are disabled when no test file exists. Skipping generation also requires at least one passing existing test; the engine checks this when the run starts.
+Baseline measurement and skipping generation are disabled when none of the selected files has a test file. With several files, both apply to the files that have tests; files without a test file are skipped when generation is skipped. Skipping generation also requires at least one passing existing test; the engine checks this when the run starts.
 
-The drawer uses automatic test-file discovery. To specify a different test path, use [the CLI](/docs/using/cli) or [HTTP API](/docs/reference/http-api). If you copy the drawer's CLI command after selecting a particular model, add `--model MODEL_ID` yourself: the displayed command does not include that selection.
+The drawer uses automatic test-file discovery. To specify a different test path, use [the CLI](/docs/using/cli) or [HTTP API](/docs/reference/http-api). The drawer's CLI command lists every selected file and the options you chose, including the model.
+
+### Several files
+
+Several files run one after another, each as its own run, like `regress run a.ts b.ts`. Starting them opens the batch page at `/batches/:id`. It shows which file is running, with a link to follow that run live, and each file's status, test counts and first and kept scores. It also shows the combined score over every mutant of the files scored in both columns. A file that fails is recorded and the rest still run. **Cancel** stops the current run, restoring its test file, and starts no more files; cancelling the current run from its own page does the same. On the **Runs** page, a batch's runs link back to it.
 
 Only one project operation can run at a time. Runs, dependency installs, and evaluations share the API's reservation. A conflicting request returns an error until the current operation finishes.
 

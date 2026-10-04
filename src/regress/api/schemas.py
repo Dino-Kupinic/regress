@@ -7,11 +7,14 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, create_model
 
+from regress.batch import BatchReport, BatchTotals
 from regress.catalog import Source as CatalogSource
 from regress.config import FILE_ONLY_SETTINGS, ModelSource, Settings
 from regress.models import Mutant, RunReport, RunStatus, StageKind
 from regress.project import Runner
 from regress.providers import ProviderName
+
+MAX_BATCH_FILES = 100
 
 
 class ErrorBody(BaseModel):
@@ -58,6 +61,7 @@ class ProjectInfo(BaseModel):
     provider: ProviderName = Field(description="The model provider runs use.")
     api_key_name: str | None = Field(description="The environment variable the key is read from; null if none.")
     active_run: str | None = Field(description="ID of the run in progress, if any.")
+    active_batch: str | None = Field(default=None, description="ID of the multi-file run in progress, if any.")
 
 
 class InitResult(BaseModel):
@@ -150,6 +154,36 @@ class RunRequest(BaseModel):
     runner: Runner | None = Field(default=None, description="How to run Vitest and Stryker.")
 
 
+class BatchRequest(BaseModel):
+    """What `regress run a.ts b.ts ...` takes: several source files, run one after another."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    sources: list[str] = Field(
+        min_length=1, max_length=MAX_BATCH_FILES, description="Source files to test, relative to the project root."
+    )
+    model: str | None = Field(
+        default=None, description="Model ID, or provider:model. Defaults to the configured model."
+    )
+    rounds: int | None = Field(default=None, ge=0, le=5, description="Improvement rounds after the first mutation run.")
+    baseline: bool = Field(
+        default=False, description="Also mutation-test the existing tests first, where there are any."
+    )
+    generate: bool = Field(
+        default=True,
+        description="false improves the existing tests directly; files without a test file are then skipped.",
+    )
+    runner: Runner | None = Field(default=None, description="How to run Vitest and Stryker.")
+
+
+class BatchDetail(BatchReport):
+    """A multi-file run: each file's result, the combined score, and which file is running now."""
+
+    combined: BatchTotals = Field(description="Scores over every mutant of the files scored in both columns.")
+    active: bool = Field(description="Whether the batch is still going.")
+    current_run: str | None = Field(description="ID of the run in progress, if any; follow it like any run.")
+
+
 class RunSummary(BaseModel):
     id: str
     created_at: datetime
@@ -167,6 +201,7 @@ class RunSummary(BaseModel):
     tests_before: int
     tests_after: int | None
     active: bool
+    batch_id: str | None = Field(default=None, description="The multi-file run this run belongs to, if any.")
 
 
 class LiveState(BaseModel):
