@@ -97,6 +97,16 @@ curl --request POST http://127.0.0.1:8765/api/runs \
 
 Unknown fields and values of the wrong type are rejected with `422`. The response is the new run's detail; its `summary.id` is the run ID.
 
+## Estimate the cost
+
+```bash
+curl --request POST http://127.0.0.1:8765/api/estimate \
+  --header 'content-type: application/json' \
+  --data '{"sources": ["src/cart.ts"], "rounds": 1}'
+```
+
+`POST /api/estimate` takes `sources`, and optionally `model`, `rounds`, `generate` and `max_cost`. It returns the model, its `price` (null when unknown), `prices_as_of`, token counts, `expected_usd` and `max_usd` overall and per file. It calls no model and needs no API key. `GET /api/evaluations/estimate` estimates a full evaluation of the project's suites. Runs, batches (`max_cost` in their bodies) and evaluations (`{"mode": "full", "max_cost": 0.5}`) take a budget per run; a budget for a model without a known price is refused with `400`. See [Costs and budgets](/docs/reference/costs).
+
 ## Run several files
 
 ```bash

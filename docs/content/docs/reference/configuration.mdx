@@ -33,6 +33,8 @@ The web app's **Settings** page and `regress models --set` write the personal co
 | `vitest_timeout` | `300` | 10–14400 s | Time limit for one Vitest validation run. |
 | `stryker_timeout` | `1800` | 30–86400 s | Time limit for one Stryker mutation run. |
 | `fail_under` | none | 0–100 % | `regress check` fails below this combined mutation score. See [Continuous integration](/docs/using/ci). |
+| `max_cost` | none | over 0, up to 10000 USD | Budget per run: Regress stops before a model call would go past it. Needs a known price. See [Costs and budgets](/docs/reference/costs). |
+| `prices` | bundled | a table of model ID to `input`, `output`, optional `cached_input` (USD per million tokens) | Prices for models Regress doesn't know, or newer prices. See [Costs and budgets](/docs/reference/costs#prices). |
 
 Unknown keys, values outside these ranges, and values of the wrong type are rejected with the file that contains them. Strings are not converted: write `rounds = 2`, not `rounds = "2"`.
 

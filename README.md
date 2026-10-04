@@ -100,6 +100,7 @@ Useful flags for `regress run`:
 | `--no-generate` | Skip the one-shot round and improve the existing tests directly. |
 | `--model/-m` | Model for this run, or `provider:model` (e.g. `anthropic:claude-sonnet-5-5`); skips the model question. |
 | `--yes/-y` | Ask nothing; use the default model. |
+| `--max-cost USD` | Budget per run: stop before a model call would go past it, keeping the best tests so far. See [Costs](#costs). |
 | `--verbose/-v` | Show full validation errors and the model's summaries. |
 
 ### Several files at once
@@ -123,6 +124,16 @@ Before a run over several files, Regress lists them and asks to go on, since eac
 ### Checking in CI
 
 `regress check` mutation-tests the existing tests without calling the model, so it costs nothing and needs no API key. It takes the same paths and `--changed` as `regress run`. `--fail-under 80` (or `fail_under` in `regress.toml`) exits with code 1 below a combined score of 80%, or when a checked file has no tests; existing tests that fail always do. `--json` prints the report, and `--markdown comment.md` writes a pull request comment with each file's score and the surviving mutants as diffs. Results are saved to `.regress/checks/<id>/`. The [CI guide](docs/content/docs/using/ci.mdx) has a GitHub Actions workflow that keeps one such comment up to date.
+
+### Costs
+
+Regress knows the prices of current OpenAI and Anthropic models (checked 2026-10-04). Override or add them with `[prices."model-id"]` (`input`, `output`, optional `cached_input`, in USD per million tokens). Before a run it prints an estimate:
+
+```text
+Estimated cost    about $0.0040, at most $0.10 (gpt-6-luna: $0.1 in / $0.5 out per 1M tokens)
+```
+
+**About** assumes each stage's first proposal is accepted. **At most** assumes every repair attempt is used and every response fills `llm_max_output_tokens`. On the examples, the estimate is within about 10% of real gpt-6-luna runs. `--max-cost` (or `max_cost`) sets a budget per run. Before every model call Regress checks the call against what is left of it, and stops with the best valid tests so far instead of going over. `report.json`, `regress report`, the web app and the eval table show what each run cost, and the eval table also shows the cost per mutant detected and per hidden bug caught. The [costs guide](docs/content/docs/reference/costs.mdx) has the details.
 
 ### Model providers
 
@@ -385,6 +396,7 @@ Code map (`src/regress/`):
 | `vitest.py`, `stryker.py` | Tool adapters |
 | `validate.py` | Candidate checks |
 | `mutants.py`, `prompts.py` | Mutant selection, prompts |
+| `pricing.py`, `estimates.py` | Model prices, cost from usage, estimates before a run |
 | `llm.py`, `llm_anthropic.py`, `providers.py` | The streaming model clients (OpenAI, OpenAI-compatible, Anthropic) and which provider and key to use |
 | `catalog.py` | Available models: fetch, cache, filter |
 | `config.py` | Layered settings and the user config |

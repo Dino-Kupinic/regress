@@ -1,0 +1,56 @@
+---
+title: Costs and budgets
+description: What runs cost, how Regress estimates it beforehand, and how a budget stops a run before it spends more.
+---
+
+Every model call costs money on your provider account. Regress knows the price of current OpenAI and Anthropic models. It estimates a run's cost before it starts, can stop a run before it spends more than a budget, and records what each run actually cost.
+
+## Prices
+
+Regress bundles standard prices in USD per million input, cached-input and output tokens for current OpenAI (`gpt-6-*`, `gpt-5.x`, `gpt-4.1`, `o3`, `o4-mini`) and Anthropic (Claude Fable, Opus, Sonnet and Haiku) models. They were checked on 2026-10-04 against [OpenAI's](https://developers.openai.com/api/docs/pricing) and [Anthropic's](https://platform.claude.com/docs/en/about-claude/pricing) pricing pages. A dated snapshot, such as `gpt-6-luna-2026-09-14` or `claude-haiku-4-5-20251001`, costs what its alias costs. `regress models` and the model question show each price.
+
+Prices change, and OpenAI-compatible servers have none. Add or override prices in `regress.toml` or your personal config:
+
+```toml title="regress.toml"
+[prices."qwen3-coder:30b"]
+input = 0         # USD per million tokens; a local model costs nothing
+output = 0
+
+[prices."gpt-6-luna"]
+input = 0.10
+output = 0.50
+cached_input = 0.01   # optional: what a cache hit costs
+```
+
+With no known price, Regress reports token counts only.
+
+## Estimates
+
+Before a run, the CLI prints what it should cost:
+
+```text
+Estimated cost    about $0.0040, at most $0.10 (gpt-6-luna: $0.1 in / $0.5 out per 1M tokens)
+Budget per run    $0.05
+```
+
+The estimate comes from the prompt Regress would send: the source, the local modules it imports, the existing tests, the instructions, and up to `max_mutants` mutants per improvement round. Token counts are rough, at about 4 characters per token, and 30% more for Claude 4.7 and later, whose tokenizer counts more. Two figures are shown:
+
+- **About** assumes each stage's first proposal is accepted: one generation call and one call per round.
+- **At most** assumes every repair attempt is used (`max_repairs`) and every response fills `llm_max_output_tokens`.
+
+On the examples project, the estimate for gpt-6-luna is within about 10% of what real runs cost. The web app shows the same estimate in the **New run** sheet and in the confirmation of a full evaluation. `POST /api/estimate` and `GET /api/evaluations/estimate` return it over HTTP.
+
+## Budgets
+
+`--max-cost USD`, or `max_cost` in config, sets a budget per run. Before every model call, Regress adds what the run has spent to what that call should cost: its prompt as written, and about as much output as the previous call, or the estimate's figure for the first call. If the sum would go past the budget, the call isn't made:
+
+- Before the first proposal, the run fails with the reason, and the test file is untouched.
+- Later, the run stops early, keeps the best valid tests so far, and records why in `stop_reason`. The CLI and the run page show it.
+
+A budget is checked call by call, so one call can still cost somewhat more than expected. For a multi-file run or an evaluation, the budget applies to each file's or each module's run. A budget needs a price: with `max_cost` set and no known price for the model, Regress refuses to start and says how to add one.
+
+## What a run cost
+
+`report.json` records `cost_usd`, the `price` it was computed with, `max_cost`, and `usage`, including `cached_input_tokens`, which are charged at the cached rate. `regress report`, the end of `regress run`, the run page and the runs list show the cost. Batch results show it per file. Evaluations add a cost column and, across the counted modules, the cost per mutant the Regress tests detect and per hidden bug caught. That lets you compare models on value, not just score.
+
+Costs are computed from the token counts the provider reports, at the prices above. They don't include provider-side discounts, taxes, or charges outside Regress. Check your provider's billing page for the amount you are actually charged.

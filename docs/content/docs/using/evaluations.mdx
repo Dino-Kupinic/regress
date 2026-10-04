@@ -57,6 +57,8 @@ The two metrics answer different questions:
 | Mutation score | How many valid Stryker mutations the selected test file detects. |
 | Hidden bugs caught | How many of the separately seeded regressions cause the test run to fail. |
 
+With a known price, the table adds a **Cost** column. A line below it gives the total cost, the cost per mutant the Regress tests detect, and the cost per hidden bug caught. The CLI prints an estimate before the evaluation starts, `--max-cost` sets a budget for each module's run, and the web app's confirmation shows the estimate. See [Costs and budgets](/docs/reference/costs).
+
 Totals count only modules with a result in every displayed column. Mutation totals are the mean of available module scores, while bug counts are summed. Check `counted_modules`, notes, and errors before comparing two benchmark runs.
 
 If the model cannot produce a valid generated test file after its repair attempts, both AI columns count as the existing tests and the module includes a note. Other failures, such as an API outage, may leave a module incomplete and outside the comparison totals. An oracle that misses a bug is reported; review the result rather than treating a completed command as proof that every bug was detected.

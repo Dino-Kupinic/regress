@@ -34,6 +34,7 @@ regress run src/cart.ts --rounds 0 --yes
 | `--baseline` | Also mutation-test passing existing tests before generation. Default off. |
 | `--generate` / `--no-generate` | Enable the initial generation step, or improve existing tests directly. Generation is on by default. |
 | `--runner auto\|bun\|npx` | Runner override. Auto prefers Bun and falls back to npx. |
+| `--max-cost USD` | Budget for the run: Regress stops before a model call would go past it and keeps the best tests so far. Defaults to `max_cost`. See [Costs and budgets](/docs/reference/costs). |
 | `--verbose`, `-v` | Show validation details and model summaries. |
 | `--yes`, `-y` | Skip the model question and use the effective default. |
 

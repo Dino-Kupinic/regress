@@ -104,7 +104,9 @@ If a run fails or is cancelled, Regress restores the original source and test fi
 | `stages[]` | Each stage's `kind`, `label`, `test_count`, `test_names`, `mutation` results, model `summary`, `attempts`, `llm_seconds`, `targeted_mutants`, `equivalent_mutants`, `rejected`, and `problems`. |
 | `stages[].mutation` | The Stryker run: `mutants[]` with status, operator, location, and covering tests, plus `killed`, `survived`, `no_coverage`, `timeout`, `errors`, and `score`. |
 | `kept_stage` | Label of the kept stage. |
-| `usage` | Model `calls`, `input_tokens`, and `output_tokens` for the whole run. |
+| `usage` | Model `calls`, `input_tokens` (including `cached_input_tokens`), and `output_tokens` for the whole run. |
+| `cost_usd`, `price` | What the model calls cost in USD, and the price (USD per million tokens) it was computed with. Null when the model's price isn't known. See [Costs and budgets](/docs/reference/costs). |
+| `max_cost`, `stop_reason` | The run's budget, and why it stopped before its last round, for example because the next call would have gone past the budget. |
 | `duration_seconds` | Wall-clock time of the finished run. |
 
 `events.jsonl` has one JSON object per line with `seq`, `time`, `type`, `message`, and `data`. It is the log the web app shows while a run is live, and the source of [`GET /api/runs/{id}/events`](/docs/reference/http-api#follow-a-run).
@@ -124,6 +126,7 @@ A run over several files (`regress run src/`, `regress run --changed main`) save
 | `files[].mutate_lines` | The lines mutated; empty for the whole file. |
 | `files[].tests_first`, `files[].tests_kept`, `files[].score_first`, `files[].score_kept` | Test counts and scores of the first measured stage and of the kept one. |
 | `files[].detected_first`, `files[].detected_kept`, `files[].valid_mutants` | Mutant counts behind the combined score. |
+| `files[].cost_usd` | What the file's run cost, when its price is known. |
 | `duration_seconds` | Wall-clock time of the whole run. |
 
 ## Checks
