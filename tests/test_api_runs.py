@@ -9,7 +9,7 @@ from collections.abc import Iterable, Iterator
 from pathlib import Path
 
 import pytest
-from conftest import EXAMPLES, ScriptedFactory, requires_examples
+from conftest import EXAMPLES, ScriptedFactory, requires_examples, slow_llm
 from fastapi.testclient import TestClient
 from test_pipeline import BASELINE, ONE_SHOT, ORACLE
 
@@ -104,3 +104,58 @@ def test_cancelling_stops_stryker_at_once(root):
     leftovers = subprocess.run(["pgrep", "-f", run_id], capture_output=True, text=True).stdout
     assert leftovers == "", "Stryker is still running"
     assert (root / "test/cart.test.ts").read_text() == BASELINE
+
+
+def wait_for_batch(client: TestClient, batch_id: str, timeout: float = 120) -> dict:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        batch = client.get(f"/api/batches/{batch_id}").json()
+        if not batch["active"]:
+            return batch
+        time.sleep(0.2)
+    raise AssertionError(f"batch {batch_id} did not finish")
+
+
+def test_a_batch_runs_files_in_turn_and_keeps_going_after_a_failure(root):
+    # The scripted model writes cart tests, so cart improves and slugify's candidates are rejected.
+    app = create_app(root, llm_factory=ScriptedFactory(ONE_SHOT, ORACLE))
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        started = client.post("/api/batches", json={"sources": ["src/cart.ts", "src/slugify.ts", "src/cart.ts"]})
+        assert started.status_code == 202, started.text
+        batch_id = started.json()["id"]
+        assert started.headers["location"] == f"/api/batches/{batch_id}"
+        assert [f["source_file"] for f in started.json()["files"]] == ["src/cart.ts", "src/slugify.ts"]  # deduplicated
+
+        assert client.post("/api/runs", json={"source": "src/cart.ts"}).status_code == 409
+        assert client.get("/api/project").json()["active_batch"] == batch_id
+
+        batch = wait_for_batch(client, batch_id)
+        cart, slugify = batch["files"]
+        assert batch["status"] == "failed" and batch["current_run"] is None
+        assert cart["status"] == "completed" and cart["score_kept"] > cart["score_first"]
+        assert slugify["status"] == "failed" and slugify["run_id"]
+        assert batch["combined"]["files"] == 1
+
+        runs = {r["id"]: r for r in client.get("/api/runs").json()}
+        assert runs[cart["run_id"]]["batch_id"] == batch_id and runs[slugify["run_id"]]["batch_id"] == batch_id
+        assert [b["id"] for b in client.get("/api/batches").json()] == [batch_id]
+        assert (root / "test/slugify.test.ts").read_text() == (EXAMPLES / "test/slugify.test.ts").read_text()
+        assert client.get("/api/project").json()["active_batch"] is None
+        assert client.post("/api/runs", json={"source": "src/cart.ts"}).status_code == 202  # released
+
+
+def test_cancelling_a_batch_stops_the_current_run_and_starts_no_more(root):
+    app = create_app(root, llm_factory=slow_llm)
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        batch_id = client.post("/api/batches", json={"sources": ["src/cart.ts", "src/slugify.ts"]}).json()["id"]
+        deadline = time.monotonic() + 60
+        while client.get(f"/api/batches/{batch_id}").json()["current_run"] is None:
+            assert time.monotonic() < deadline
+            time.sleep(0.1)
+        assert client.post(f"/api/batches/{batch_id}/cancel").status_code == 202
+
+        batch = wait_for_batch(client, batch_id)
+        assert batch["status"] == "cancelled"
+        assert [f["status"] for f in batch["files"]] == ["cancelled", "pending"]
+        assert (root / "test/cart.test.ts").read_text() == BASELINE
+        assert client.post(f"/api/batches/{batch_id}/cancel").status_code == 409

@@ -33,7 +33,8 @@ from typing import Any
 from fastapi import HTTPException
 
 from regress.api.results import EVENTS_FILE, contained, load_events, summarize
-from regress.api.schemas import EventType, LiveState, RunEvent, RunRequest, RunSummary
+from regress.api.schemas import BatchDetail, BatchRequest, EventType, LiveState, RunEvent, RunRequest, RunSummary
+from regress.batch import BatchReport, FileResult, summarize_run
 from regress.config import Settings, load_settings
 from regress.errors import CandidateRejected, ProjectError, RegressError, ToolError
 from regress.files import atomic_write_bytes, atomic_write_text
@@ -116,6 +117,7 @@ class RunSpec:
     options: RunOptions
     llm_factory: LLMFactory
     project_lock: _InheritedLock | None = None
+    batch_id: str | None = None
 
 
 @dataclass
@@ -139,7 +141,7 @@ def run_worker(spec: RunSpec, conn: Connection, server_pid: int) -> None:
     llm = None
     try:
         llm = spec.llm_factory(spec.model, spec.settings)
-        Pipeline(spec.project, llm, spec.options, reporter).run(spec.run_dir)
+        Pipeline(spec.project, llm, spec.options, reporter, batch_id=spec.batch_id).run(spec.run_dir)
     except KeyboardInterrupt:
         reporter.event("cancelled", "Cancelled. The test file was restored.")
     except RegressError as error:
@@ -302,6 +304,7 @@ class Job:
             test_file=project.test_rel,
             test_file_existed=project.test_file.is_file(),
             model=spec.model,
+            batch_id=spec.batch_id,
         )
         self.events: list[RunEvent] = []
         self.activity: str | None = None
@@ -509,6 +512,133 @@ class Job:
             atomic_write_bytes(source, self._original_source)
 
 
+class Batch:
+    """Several files run one after another, as ordinary runs under one project reservation.
+
+    Each file gets its own run (worker process, recovery record, live view, cancellation); the batch only
+    decides what runs next, keeps the combined summary in .regress/batches/<id>.json, and stops early when
+    cancelled or when a run's cleanup failed.
+    """
+
+    def __init__(
+        self,
+        manager: RunManager,
+        report: BatchReport,
+        projects: list[Project | None],
+        settings: Settings,
+        options: RunOptions,
+        release: Callable[[], None],
+    ) -> None:
+        self.id = report.id
+        self.report = report
+        self.lock = threading.Lock()
+        self.done = threading.Event()
+        self.cancel_requested = False
+        self.current: Job | None = None
+        self._manager = manager
+        self._projects = projects  # None: a file that is skipped (no tests to improve)
+        self._settings = settings
+        self._options = options
+        self._release = release
+        self._started = time.monotonic()
+
+    def start(self) -> None:
+        self._save()
+        threading.Thread(target=self._run, name=f"regress-batch-{self.id}", daemon=True).start()
+
+    def cancel(self) -> bool:
+        with self.lock:
+            if self.done.is_set() or self.cancel_requested:
+                return False
+            self.cancel_requested = True
+            current = self.current
+        if current is not None:
+            current.cancel()
+        return True
+
+    def detail(self) -> BatchDetail:
+        with self.lock:
+            current = self.current.id if self.current is not None and not self.current.done.is_set() else None
+            return _batch_detail(self.report, active=not self.done.is_set(), current_run=current)
+
+    def _run(self) -> None:
+        try:
+            for project, result in zip(self._projects, self.report.files, strict=True):
+                if self._stopping():
+                    break
+                if project is None:
+                    continue  # already marked skipped
+                try:
+                    job = self._manager._launch(project, self._settings, self._options, _no_release, self.id)
+                except Exception as error:
+                    with self.lock:
+                        result.status, result.error = "failed", f"Could not start the run: {error}"
+                    self._save()
+                    continue
+                with self.lock:
+                    self.current = job
+                    result.status, result.run_id = "running", job.id
+                if self.cancel_requested:  # cancelled while this run was starting
+                    job.cancel()
+                self._save()
+                job.done.wait()
+                with job.lock:
+                    run = job.report.model_copy(deep=True)
+                with self.lock:
+                    self.current = None
+                    if run.status == "completed":
+                        summarize_run(run, result)
+                    elif run.status == "cancelled":
+                        # Cancelling one of the batch's runs stops the batch, like Ctrl-C in `regress run a b`.
+                        self.cancel_requested = True
+                        result.status, result.error = "cancelled", run.error
+                    else:
+                        result.status, result.error = (
+                            ("cancelled" if run.status == "cancelled" else "failed"),
+                            run.error,
+                        )
+                self._save()
+        except Exception:
+            log.exception("Batch %s stopped unexpectedly", self.id)
+        finally:
+            with self.lock:
+                stopped = self.cancel_requested or self._manager.closed
+                for result in self.report.files:
+                    if result.status in ("running", "pending") and stopped:
+                        result.status = "cancelled" if result.status == "running" else "pending"
+                if stopped:
+                    self.report.status = "cancelled"
+                elif self.report.failed or any(f.status == "pending" for f in self.report.files):
+                    self.report.status = "failed"
+                else:
+                    self.report.status = "completed"
+                self.report.duration_seconds = round(time.monotonic() - self._started, 1)
+            try:
+                self._save()
+            finally:
+                self._release()
+                self.done.set()
+
+    def _stopping(self) -> bool:
+        return self.cancel_requested or self._manager.closed or self._manager.blocking_problem is not None
+
+    def _save(self) -> None:
+        with self.lock:
+            report = self.report.model_copy(deep=True)
+        try:
+            self._manager.store.save_batch(report)
+        except Exception:
+            log.exception("Could not save batch %s", self.id)
+
+
+def _no_release() -> None:
+    """A batch's runs leave the project reserved; the batch releases it when it is over."""
+
+
+def _batch_detail(report: BatchReport, active: bool, current_run: str | None = None) -> BatchDetail:
+    return BatchDetail(**report.model_dump(), combined=report.totals, active=active, current_run=current_run)
+
+
 class RunManager:
     """Starts runs, one at a time per project, and finds them again by ID."""
 
@@ -522,6 +652,7 @@ class RunManager:
         self._claim_condition = threading.Condition(self._lock)
         self._claiming = False
         self._jobs: dict[str, Job] = {}
+        self._batches: dict[str, Batch] = {}
         self._busy: str | None = None
         self._reservation: object | None = None
         self._closed = False
@@ -624,6 +755,32 @@ class RunManager:
 
     def _recover(self) -> None:
         """Restore unfinished API-owned runs after every process from the old server has exited."""
+        self._recover_runs()
+        self._recover_batches()
+
+    def _recover_batches(self) -> None:
+        """A batch still marked running belonged to a server that stopped; its runs are recovered on their own."""
+        directory = self.store.batch_path("x").parent
+        if directory.is_symlink() or not directory.is_dir():
+            return
+        for path in sorted(directory.glob("*.json")):
+            if path.is_symlink():
+                continue
+            try:
+                report = BatchReport.model_validate_json(path.read_text())
+            except (OSError, ValueError):
+                continue
+            if report.status != "running":
+                continue
+            for result in report.files:
+                if result.status == "running":
+                    result.status = "failed"
+                    result.error = "The API server stopped before this run finished."
+            report.status = "cancelled"
+            self.store.save_batch(report)
+            log.warning("Marked interrupted batch %s as cancelled", report.id)
+
+    def _recover_runs(self) -> None:
         if self.store.base.is_symlink() or not self.store.base.resolve().is_relative_to(self.root):
             raise ProjectError("The run directory must stay inside the project and must not be a symlink.")
         if not self.store.base.is_dir():
@@ -699,16 +856,14 @@ class RunManager:
             raise
 
     def _start(self, request: RunRequest, release: Callable[[], None]) -> Job:
-        settings = load_settings(self.root, rounds=request.rounds, model=request.model, runner=request.runner)
-        source = self.project_path(request.source)
-        project = load_project(source, self.project_path(request.test) if request.test else None, settings.runner)
-        if project.root != self.root:
-            raise ProjectError(
-                f"{request.source} belongs to the project in {project.root}. Serve that one instead: "
-                f"regress serve {project.root}"
-            )
+        settings, options = self._run_settings(request)
+        project = self._project(request.source, request.test, settings)
         if not request.generate and not project.test_file.is_file():
             raise ProjectError(f"generate=false improves existing tests, but {project.test_rel} does not exist.")
+        return self._launch(project, settings, options, release)
+
+    def _run_settings(self, request: RunRequest | BatchRequest) -> tuple[Settings, RunOptions]:
+        settings = load_settings(self.root, rounds=request.rounds, model=request.model, runner=request.runner)
         if settings.model is None:
             raise ProjectError(
                 f"No model chosen for provider {settings.provider}: pass model, or set one in regress.toml."
@@ -724,6 +879,28 @@ class RunManager:
             vitest_timeout=settings.vitest_timeout,
             stryker_timeout=settings.stryker_timeout,
         )
+        return settings, options
+
+    def _project(self, relative: str, test: str | None, settings: Settings) -> Project:
+        source = self.project_path(relative)
+        project = load_project(source, self.project_path(test) if test else None, settings.runner)
+        if project.root != self.root:
+            raise ProjectError(
+                f"{relative} belongs to the project in {project.root}. Serve that one instead: "
+                f"regress serve {project.root}"
+            )
+        return project
+
+    def _launch(
+        self,
+        project: Project,
+        settings: Settings,
+        options: RunOptions,
+        release: Callable[[], None],
+        batch_id: str | None = None,
+    ) -> Job:
+        """Start one run's worker. `release` frees the project reservation when the run is over."""
+        assert settings.model is not None
         with self._lock:
             if self._closed:
                 raise HTTPException(503, "Regress is shutting down.")
@@ -737,6 +914,7 @@ class RunManager:
                     options,
                     self.llm_factory,
                     _InheritedLock(self.lock_descriptor),
+                    batch_id,
                 ),
                 lambda finished: self._exited(finished, release),
             )
@@ -755,6 +933,92 @@ class RunManager:
                     log.exception("Could not finalize a failed startup for run %s", job.id)
                 raise
         return job
+
+    def start_batch(self, request: BatchRequest) -> Batch:
+        """Run several files one after another. The project stays reserved until the last one is over."""
+        sources = list(dict.fromkeys(request.sources))
+        release = self.reserve(f"running {len(sources)} files")
+        try:
+            settings, options = self._run_settings(request)
+            projects: list[Project | None] = []
+            results: list[FileResult] = []
+            problems: list[str] = []
+            for relative in sources:
+                try:
+                    project = self._project(relative, None, settings)
+                except ProjectError as error:
+                    problems.append(f"{relative}: {error}")
+                    continue
+                result = FileResult(source_file=project.source_rel)
+                if not request.generate and not project.test_file.is_file():
+                    result.status, result.error = "skipped", f"No test file to improve ({project.test_rel})."
+                    project = None
+                projects.append(project)
+                results.append(result)
+            if problems:
+                raise ProjectError("Some files can't be run:\n" + "\n".join(f"  {p}" for p in problems))
+            if all(p is None for p in projects):
+                raise ProjectError("generate=false improves existing tests, but none of these files has a test file.")
+            report = BatchReport(
+                id=self.store.create_batch_id(),
+                created_at=datetime.now().astimezone(),
+                project_root=str(self.root),
+                model=settings.model or "",
+                files=results,
+            )
+            batch = Batch(self, report, projects, settings, options, release)
+            with self._lock:
+                if self._closed:
+                    raise HTTPException(503, "Regress is shutting down.")
+                self._batches[batch.id] = batch
+            batch.start()
+            return batch
+        except BaseException:
+            release()
+            raise
+
+    def batch(self, batch_id: str) -> BatchDetail:
+        with self._lock:
+            batch = self._batches.get(batch_id)
+        if batch is not None:
+            return batch.detail()
+        if not _RUN_ID.fullmatch(batch_id):
+            raise HTTPException(404, f"No batch {batch_id}.")
+        path = self.store.batch_path(batch_id)
+        if path.is_symlink() or not path.is_file():
+            raise HTTPException(404, f"No batch {batch_id}.")
+        try:
+            report = BatchReport.model_validate_json(path.read_text())
+        except (OSError, ValueError) as error:
+            raise HTTPException(500, f"The summary of batch {batch_id} is unreadable: {error}") from error
+        return _batch_detail(report, active=False)
+
+    def cancel_batch(self, batch_id: str) -> BatchDetail:
+        with self._lock:
+            batch = self._batches.get(batch_id)
+        if batch is None or batch.done.is_set() or not batch.cancel():
+            raise HTTPException(409, f"Batch {batch_id} is not in progress.")
+        return batch.detail()
+
+    def batches(self) -> list[BatchDetail]:
+        directory = self.store.batch_path("x").parent
+        found: dict[str, BatchDetail] = {}
+        if directory.is_dir() and not directory.is_symlink():
+            for path in directory.glob("*.json"):
+                if path.is_symlink():
+                    continue
+                try:
+                    found[path.stem] = _batch_detail(BatchReport.model_validate_json(path.read_text()), active=False)
+                except (OSError, ValueError):
+                    continue
+        with self._lock:
+            batches = list(self._batches.values())
+        found |= {batch.id: batch.detail() for batch in batches}
+        return sorted(found.values(), key=lambda b: (b.created_at, b.id), reverse=True)
+
+    def active_batch(self) -> Batch | None:
+        with self._lock:
+            return next((b for b in self._batches.values() if not b.done.is_set()), None)
 
     def lookup(self, run_id: str) -> RunHandle:
         with self._lock:
@@ -822,6 +1086,9 @@ class RunManager:
         with self._lock:
             self._closed = True
             jobs = list(self._jobs.values())
+            batches = list(self._batches.values())
+        for batch in batches:
+            batch.cancel()
         for job in jobs:
             job.cancel()
         for job in jobs:
@@ -829,6 +1096,9 @@ class RunManager:
                 job._signal(signal.SIGKILL)
                 if not job.done.wait(5):
                     log.error("Run %s did not finish cleanup before shutdown", job.id)
+        for batch in batches:
+            if not batch.done.wait(5):
+                log.error("Batch %s did not finish before shutdown", batch.id)
         with self._lock:
             if self._project_lock is not None:
                 os.close(self._project_lock)

@@ -20,7 +20,7 @@ from regress.project import Runner, find_project_root, load_project, source_file
 from regress.store import RunStore
 from regress.ui import Reporter
 
-FileStatus = Literal["pending", "completed", "failed", "cancelled", "skipped"]
+FileStatus = Literal["pending", "running", "completed", "failed", "cancelled", "skipped"]
 
 
 @dataclass(frozen=True)
@@ -187,7 +187,7 @@ def _run_one(
     try:
         project = dataclasses.replace(load_project(target.source, None, runner), mutate_lines=tuple(lines))
         pipeline = Pipeline(project, llm, options, reporter, store, batch_id=batch_id)
-        _summarize(pipeline.run(), result)
+        summarize_run(pipeline.run(), result)
     except RegressError as error:
         result.status, result.error = "failed", str(error)
     except Exception as error:  # keep going with the other files; the run's own report has the details
@@ -198,7 +198,8 @@ def _run_one(
             result.run_id = run_dir.name
 
 
-def _summarize(run: RunReport, result: FileResult) -> None:
+def summarize_run(run: RunReport, result: FileResult) -> None:
+    """Fill in a completed file's result from its run report."""
     result.status = "completed"
     first, kept = run.reference, run.kept
     if first is not None:
