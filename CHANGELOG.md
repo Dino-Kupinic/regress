@@ -2,6 +2,27 @@
 
 <!-- version list -->
 
+## v0.5.0 (2026-10-04)
+
+### Bug Fixes
+
+- **web**: Give the settings save buttons room in a narrow card
+  ([`dc4ee57`](https://github.com/Dino-Kupinic/regress/commit/dc4ee579edf1c00161f426611be6ae7a9d4cf686))
+
+### Documentation
+
+- Describe multi-file runs in the web app and the HTTP API
+  ([`c49aca1`](https://github.com/Dino-Kupinic/regress/commit/c49aca146d59cef5da7aab47679d3deb8a8e196d))
+
+### Features
+
+- **api**: Run several source files over HTTP as one batch
+  ([`9c6c47b`](https://github.com/Dino-Kupinic/regress/commit/9c6c47beb3d9390d6cfba4078c4dccaf9b7eb246))
+
+- **web**: Select several source files for a new run
+  ([`1a078b3`](https://github.com/Dino-Kupinic/regress/commit/1a078b394ee6c8aa92da9d07207f05f192d6455f))
+
+
 ## v0.4.0 (2026-10-04)
 
 ### Documentation
