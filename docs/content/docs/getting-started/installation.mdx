@@ -14,7 +14,7 @@ Regress has a Python CLI and API, a React web application, and a JavaScript tool
 | uv | Installs and runs the Python package. |
 | Node.js | Use Node.js 22, matching the repository's CI and production image. |
 | Bun | Recommended for the examples, frontend, Vitest, and Stryker. CI and the production image use Bun 1.3.13. |
-| OpenAI API key | Required for model generation and improvement; backend tests and oracle evaluation do not call a model. |
+| A model provider's API key | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or none for a local OpenAI-compatible server ([Model providers](/docs/reference/providers)). Required for model generation and improvement; backend tests and oracle evaluation do not call a model. |
 
 The target project needs installed `vitest`, `@stryker-mutator/core`, and `@stryker-mutator/vitest-runner` development dependencies. Use Vitest 2–4; the bundled examples use Vitest 4 and Stryker 10. Regress rejects the unsupported Vitest 5/Stryker runner 10 combination because mutants would not activate. [Project setup](/docs/getting-started/project-setup) explains installation for your own repository.
 

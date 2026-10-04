@@ -37,7 +37,7 @@ from regress.api.schemas import EventType, LiveState, RunEvent, RunRequest, RunS
 from regress.config import Settings, load_settings
 from regress.errors import CandidateRejected, ProjectError, RegressError, ToolError
 from regress.files import atomic_write_bytes, atomic_write_text
-from regress.llm import LLM, OpenAILLM, require_api_key
+from regress.llm import LLM, create_llm, require_api_key
 from regress.models import RunReport, Stage
 from regress.pipeline import Pipeline, RunOptions
 from regress.process import retain_worker_resources
@@ -100,14 +100,9 @@ def _rollback_path(root: Path, relative: str) -> Path:
     return path
 
 
-def openai_llm(model: str, settings: Settings) -> LLM:
-    return OpenAILLM(
-        model,
-        settings.reasoning_effort,
-        idle_timeout=settings.llm_timeout,
-        max_duration=settings.llm_max_duration,
-        max_output_tokens=settings.llm_max_output_tokens,
-    )
+def provider_llm(model: str, settings: Settings) -> LLM:
+    """The configured provider's model: OpenAI, Anthropic, or an OpenAI-compatible server."""
+    return create_llm(settings, model)
 
 
 @dataclass
@@ -520,7 +515,7 @@ class RunManager:
     def __init__(self, root: Path, llm_factory: LLMFactory | None = None) -> None:
         self.root = root
         self.store = RunStore(root)
-        self.llm_factory = llm_factory or openai_llm
+        self.llm_factory = llm_factory or provider_llm
         self.needs_api_key = llm_factory is None
         self._context = multiprocessing.get_context("spawn")
         self._lock = threading.Lock()
@@ -714,8 +709,12 @@ class RunManager:
             )
         if not request.generate and not project.test_file.is_file():
             raise ProjectError(f"generate=false improves existing tests, but {project.test_rel} does not exist.")
+        if settings.model is None:
+            raise ProjectError(
+                f"No model chosen for provider {settings.provider}: pass model, or set one in regress.toml."
+            )
         if self.needs_api_key:
-            require_api_key()
+            require_api_key(settings.provider, settings.api_key_env)
         options = RunOptions(
             rounds=settings.rounds,
             max_repairs=settings.max_repairs,

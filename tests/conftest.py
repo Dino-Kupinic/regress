@@ -84,7 +84,15 @@ def isolated_user_env(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pyt
     home = tmp_path_factory.mktemp("home")
     monkeypatch.setenv("XDG_CONFIG_HOME", str(home / "config"))
     monkeypatch.setenv("XDG_CACHE_HOME", str(home / "cache"))
-    for variable in ("OPENAI_API_KEY", "REGRESS_MODEL", "REGRESS_REASONING_EFFORT"):
+    for variable in (
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_BASE_URL",
+        "REGRESS_PROVIDER",
+        "REGRESS_MODEL",
+        "REGRESS_REASONING_EFFORT",
+    ):
         monkeypatch.delenv(variable, raising=False)
     return home
 

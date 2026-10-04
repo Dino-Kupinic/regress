@@ -1,0 +1,74 @@
+---
+title: Model providers
+description: Use OpenAI, Anthropic's Claude models, or any OpenAI-compatible server such as Ollama, vLLM or OpenRouter.
+---
+
+Regress sends the same prompts to every provider and asks each for the same structured test file. The provider decides which client is used, where the API key comes from, and which models `regress models` lists.
+
+| `provider` | Default model | API key | Models listed from |
+| --- | --- | --- | --- |
+| `openai` (default) | `gpt-6-luna` | `OPENAI_API_KEY` | The OpenAI Models API, or the openai SDK's list |
+| `anthropic` | `claude-opus-5-5` | `ANTHROPIC_API_KEY` | The Anthropic Models API, or Regress's list of current Claude models |
+| `openai-compatible` | none: set `model` | none, or the variable named by `api_key_env` | The server's `/models` endpoint |
+
+## Choosing a provider
+
+Set `provider` in `regress.toml` or your personal config, or `REGRESS_PROVIDER` in the environment. A model ID can also name its provider, which is the quickest way to switch for one run:
+
+```bash
+regress run src/cart.ts --model anthropic:claude-sonnet-5-5
+regress models --set anthropic:claude-opus-5-5   # also makes Anthropic your default provider
+regress models --provider anthropic              # list another provider's models
+```
+
+Only the three provider names count as a prefix, so Ollama IDs with a colon of their own, such as `llama3.1:8b`, stay whole.
+
+A layer that switches the provider without naming a model drops the model set by the layers below it, because that model belongs to another provider. For example, with `model = "gpt-6-sol"` in your personal config and `provider = "anthropic"` in `regress.toml`, runs use `claude-opus-5-5`, Anthropic's default. A model saved by `regress models --set` or the CLI's "remember" answer is stored as `provider:model` for any provider other than OpenAI.
+
+## OpenAI
+
+The default. Regress uses the Responses API with structured output, and shows reasoning-summary headlines while the model thinks. `OPENAI_BASE_URL`, `OPENAI_ORG_ID` and `OPENAI_PROJECT_ID` work as in the OpenAI SDK.
+
+## Anthropic
+
+```toml title="regress.toml"
+provider = "anthropic"
+# model = "claude-sonnet-5-5"   # default: claude-opus-5-5
+```
+
+Set `ANTHROPIC_API_KEY`. Regress streams from the Messages API with a JSON-schema output format:
+
+- **Thinking.** Models that support adaptive thinking (Claude Opus and Sonnet 4.6 and later, and Claude Fable) think adaptively, with summaries shown in the live status.
+- **Effort.** `reasoning_effort` maps onto Claude's effort levels: `none` and `minimal` become `low`. When it is unset, Regress uses `high`, because writing tests that catch mutants is coding work. Claude Opus 5.5 alone would default to `medium`.
+- **Older models.** Claude Haiku 4.5 and older models run without thinking or effort.
+- **Refusal fallback.** On Claude Fable 5.1, Opus 5.5, Opus 5 and Sonnet 5.5, requests opt into Anthropic's server-side refusal fallback (`fallbacks: "default"`). If a safety classifier declines, the API re-runs the request on Anthropic's recommended fallback model instead of returning the refusal. Fallback is skipped when `base_url` points elsewhere, for example at a proxy.
+- **Stop reasons.** A refusal that still ends the response, or an answer cut off by `llm_max_output_tokens`, fails the attempt with that reason.
+
+`base_url` sends requests to another Anthropic-compatible address, such as a gateway.
+
+## OpenAI-compatible servers
+
+For a local or self-hosted model server, or a hosted router:
+
+```toml title="regress.toml"
+provider = "openai-compatible"
+base_url = "http://localhost:11434/v1"   # Ollama; vLLM: http://localhost:8000/v1
+model = "qwen3-coder:30b"
+```
+
+```toml title="regress.toml (OpenRouter)"
+provider = "openai-compatible"
+base_url = "https://openrouter.ai/api/v1"
+api_key_env = "OPENROUTER_API_KEY"
+model = "qwen/qwen3-coder"   # any model ID from openrouter.ai/models
+```
+
+Regress uses Chat Completions with a JSON-schema `response_format`, the part of the OpenAI API these servers share most widely. The model must support structured output (JSON schema). Small local models often write test files that fail validation. Regress sends the errors back as usual, but expect more repair attempts. `OPENAI_BASE_URL` works in place of `base_url`.
+
+There is no default model, so set `model`, pass `--model`, or pick one from the list the server returns. A server without a key needs no `api_key_env`. When `api_key_env` is set, that variable must be set too.
+
+## Keys and the web app
+
+API keys stay in the server's environment or `.env` file; the web app never sees them. The **Setup** and **Settings** pages show the configured provider's key variable and whether it is set, and the Settings page can switch the provider and model. Switching the provider there clears the saved model, so the new provider's default applies until you pick one.
+
+`base_url` and `api_key_env` can be set only in `regress.toml`, the personal config, or the environment, never through `PATCH /api/settings`. Together they decide where prompts and a key are sent: a web user able to change both could send any server environment variable to an address of their choosing.

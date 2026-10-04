@@ -38,6 +38,7 @@ from regress.project import (
     planned_installs,
     source_files,
 )
+from regress.providers import key_env, missing_key
 from regress.store import regress_dir
 
 INSTALL_TIMEOUT = 600
@@ -61,9 +62,17 @@ def project_info(manager: RunManager) -> ProjectInfo:
         )
     except ProjectError as error:
         problems.append(str(error))
-    api_key_set = bool(os.environ.get("OPENAI_API_KEY", "").strip())
-    if manager.needs_api_key and not api_key_set:
-        problems.append("OPENAI_API_KEY is not set. Add it to the environment or a .env file and restart the server.")
+    missing = missing_key(settings.provider, settings.api_key_env)
+    api_key_set = missing is None
+    if manager.needs_api_key and missing:
+        problems.append(
+            f"{missing.removesuffix(' Export it or add it to a .env file.')}. "
+            "Add it to the environment or a .env file and restart the server."
+        )
+    if settings.provider == "openai-compatible" and not (settings.base_url or os.environ.get("OPENAI_BASE_URL")):
+        problems.append('provider = "openai-compatible" needs base_url in regress.toml (the server\'s API address).')
+    if settings.model is None:
+        problems.append(f"No model is set for provider {settings.provider}. Set model in regress.toml.")
     active = manager.active()
     return ProjectInfo(
         root=str(root),
@@ -74,6 +83,8 @@ def project_info(manager: RunManager) -> ProjectInfo:
         problems=problems,
         ready=not problems,
         api_key_set=api_key_set,
+        provider=settings.provider,
+        api_key_name=key_env(settings.provider, settings.api_key_env),
         active_run=active.id if active else None,
     )
 

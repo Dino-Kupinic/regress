@@ -76,14 +76,21 @@ After `max_repairs` retries a proposal is recorded as a rejected stage. `max_rep
 
 See [Configuration](/docs/reference/configuration) for the limits.
 
-### OpenAI errors
+### Provider errors
 
 | Message | Fix |
 | --- | --- |
-| `OPENAI_API_KEY is not set` | Export the key, or add it to a `.env` file in the directory you run Regress from. Restart `regress serve` after changing it. |
-| `OpenAI rejected the API key` | The key is wrong or revoked. |
+| `OPENAI_API_KEY is not set`, `ANTHROPIC_API_KEY is not set` | Export the configured provider's key, or add it to a `.env` file in the directory you run Regress from. Restart `regress serve` after changing it. |
+| `OpenAI rejected the API key`, `Anthropic rejected the API key` | The key is wrong or revoked. |
 | `OpenAI quota exhausted` | Add billing credit or raise the limit for the key's project. |
-| `… is not available to your API key` | Choose another model with `regress models`. |
+| `… is not available to your API key`, `Anthropic does not know model …` | Choose another model with `regress models`. |
+| `… declined to write these tests` | A Claude safety classifier declined and no fallback took over. Try another model. |
+| `provider = "openai-compatible" needs the server's address` | Set `base_url` in `regress.toml`, for example `http://localhost:11434/v1`. |
+| `The server does not know model …` | The model isn't loaded on the server; check `regress models` or pull it (`ollama pull …`). |
+| `No model chosen for provider openai-compatible` | Set `model`, or pass `--model`. |
+| `The model's response was unusable` | An OpenAI-compatible model returned invalid JSON or ran out of output tokens. Use a model with structured-output support, or raise `llm_max_output_tokens`. |
+
+See [Model providers](/docs/reference/providers) for each provider's setup.
 
 ### Mutation testing is slow or times out
 
@@ -128,7 +135,7 @@ The response lists which check failed:
 - `project: false`: sign in and open `/api/project` or the Project setup page for the missing package, invalid setting, or missing key.
 - `storage: false`: the volume at `/data` is not writable, or it is full.
 
-Readiness does not call OpenAI. A ready instance can still fail runs because of the key, quota, model access, or the network.
+Readiness does not call the model provider. A ready instance can still fail runs because of the key, quota, model access, or the network.
 
 ### Files are restored after a crash
 

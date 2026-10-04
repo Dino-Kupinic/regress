@@ -44,6 +44,7 @@ from regress.catalog import ModelInfo, load_catalog
 from regress.config import load_settings, save_user_settings
 from regress.errors import ProjectError
 from regress.evaluation import BugSuite, EvalResult
+from regress.providers import ProviderName
 from regress.ui import PICKER_SIZE
 
 STREAM_INTERVAL = 0.25
@@ -175,8 +176,11 @@ def update_settings(update: SettingsUpdate, manager: Manager) -> SettingsInfo:  
 
     The project's regress.toml still wins over it; check `model_source` in the response.
     """
+    changes = update.model_dump(exclude_unset=True)
+    if "provider" in changes and "model" not in changes:
+        changes["model"] = None  # the saved model belongs to the previous provider; use the new one's default
     try:
-        save_user_settings(**update.model_dump(exclude_unset=True))
+        save_user_settings(**changes)
     except ProjectError as error:
         raise HTTPException(422, str(error)) from error
     return projects.settings_info(manager.root)
@@ -187,12 +191,20 @@ def list_models(
     manager: Manager,
     refresh: Annotated[bool, Query(description="Fetch the list again instead of using the day-old cache.")] = False,
     include_all: Annotated[bool, Query(alias="all", description="Include older models and dated snapshots.")] = False,
+    provider: Annotated[
+        ProviderName | None, Query(description="Another provider's models, e.g. before switching to it.")
+    ] = None,
 ) -> ModelList:
     """The newest models the API key can use, for choosing which one writes the tests."""
-    catalog = load_catalog(refresh=refresh)
-    settings = load_settings(manager.root)
+    try:
+        settings = load_settings(manager.root, provider=provider)
+    except ProjectError as error:
+        raise HTTPException(422, str(error)) from error
+    catalog = load_catalog(
+        refresh, provider=settings.provider, base_url=settings.base_url, api_key_env=settings.api_key_env
+    )
     shown = catalog.latest(None if include_all else PICKER_SIZE, include_snapshots=include_all)
-    if settings.model not in {m.id for m in shown}:
+    if settings.model is not None and settings.model not in {m.id for m in shown}:
         shown.append(next((m for m in catalog.models if m.id == settings.model), ModelInfo(settings.model)))
     newest = catalog.latest(1)
     newest_id = newest[0].id if newest else None
@@ -212,6 +224,7 @@ def list_models(
         description=catalog.describe(),
         note=catalog.note,
         verified=catalog.verified,
+        provider=settings.provider,
         default_model=settings.model,
         model_source=settings.model_source,
         hidden=max(0, len(catalog.latest(None, include_snapshots=True)) - len(shown)),

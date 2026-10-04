@@ -1,13 +1,13 @@
 ---
 name: regress
-description: Strengthen the Vitest tests for one TypeScript or JavaScript source file with Regress, a CLI that mutation-tests the file with StrykerJS and has an OpenAI model write tests that catch the mutants that survived. Use when asked to run regress, to generate or improve tests for a TS/JS file with mutation testing, to raise a mutation score, or to read a Regress run report (`.regress/runs/`, `report.json`).
+description: Strengthen the Vitest tests for one TypeScript or JavaScript source file with Regress, a CLI that mutation-tests the file with StrykerJS and has a model (OpenAI, Claude, or an OpenAI-compatible server) write tests that catch the mutants that survived. Use when asked to run regress, to generate or improve tests for a TS/JS file with mutation testing, to raise a mutation score, or to read a Regress run report (`.regress/runs/`, `report.json`).
 ---
 
 # Regress
 
 Regress improves the test file for **one source file at a time**. It can run several files in a row, but each file gets its own run:
 
-1. An OpenAI model writes tests for the source file.
+1. A model (OpenAI by default, or Claude, or an OpenAI-compatible server) writes tests for the source file.
 2. StrykerJS makes small deliberate bugs in that file (mutants).
 3. Every mutant the tests fail to catch goes back to the model as a regression to cover.
 
@@ -17,12 +17,12 @@ It supports TypeScript and JavaScript projects with **Vitest 2–4**, run throug
 
 ## Ground rules
 
-- **Runs cost money.** `regress run` and `regress eval` (without `--oracle`) call the OpenAI API on the user's key. Start a run only when the user asked for one. Ask before running Regress over several files.
+- **Runs cost money.** `regress run` and `regress eval` (without `--oracle`) call the configured provider's API on the user's key. Start a run only when the user asked for one. Ask before running Regress over several files.
 - **`regress check` is free.** It mutation-tests the existing tests without the model and needs no API key. Use it to measure a file before suggesting a paid run (`regress check src/cart.ts`), or to see which mutants survive (`--json`).
 - **Runs execute model-written test code** on this machine, as any test an assistant writes would.
 - **Regress rewrites the test file.** A run that fails or is interrupted restores the original file. A run that completes leaves the kept version in place, uncommitted. Check `git status` first, so the diff you show afterwards is only Regress's.
 - **Run one job per project at a time.** Don't run two runs at once. Don't start a CLI run while `regress serve` is serving the same project. Don't edit, format or watch-rebuild the source file during a run: Regress aborts if it changes.
-- Never print or log `OPENAI_API_KEY`.
+- Never print or log `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or any other key.
 
 ## 1. Check the setup
 
@@ -48,7 +48,7 @@ regress init path/to/project --yes
 
 This uses the project's package manager (from its lockfile), so it changes `package.json` and the lockfile. It installs `vitest@^4` in place of a Vitest 5. If the user didn't ask you to set Regress up, tell them what it will install first.
 
-`OPENAI_API_KEY` must be exported, or set in a `.env` file in the directory you run `regress` from or a parent directory. `regress init` warns when it is missing. If the key is missing, ask the user to set it; never ask them to paste it into the chat.
+The configured provider's key must be exported (`OPENAI_API_KEY` by default, `ANTHROPIC_API_KEY` with `provider = "anthropic"`; a local OpenAI-compatible server needs none), or set in a `.env` file in the directory you run `regress` from or a parent directory. `regress init` warns when it is missing. If the key is missing, ask the user to set it; never ask them to paste it into the chat.
 
 ## 2. Choose the file
 
@@ -72,7 +72,7 @@ Always pass `--yes` (use the configured default model) or `--model MODEL_ID`, so
 | `--no-generate` | You want to keep the existing test file and only add to it. It skips the one-shot generation and improves the existing tests directly. It needs a passing test file with at least one test. |
 | `--rounds N` | You want more (or no) improvement rounds after the first mutation run. The range is 0–5 and the default is 1. `0` generates and measures only. |
 | `--test PATH` | Discovery picks the wrong file, or several candidates exist. |
-| `--model ID` | The user named a model. `regress models` lists the models their key can use. |
+| `--model ID` | The user named a model. `regress models` lists the models their key can use. `provider:ID` (e.g. `anthropic:claude-sonnet-5-5`) switches provider for the run. |
 | `--verbose` | You need the full validation errors and the model's summaries. |
 | `--changed REF` | The user wants to test what a branch changed. It picks the source files changed since the merge base with `REF` (committed, uncommitted and untracked) and mutates only their changed lines. Each file costs model calls, so confirm the list with the user first. |
 
@@ -149,7 +149,7 @@ Start with the error message, then look at `regress report RUN_ID` and the run d
 | `--no-generate needs an existing test file …` | Drop `--no-generate`. |
 | `The model did not produce valid tests in N attempts` | The terminal lists each attempt's problems (`--verbose` shows them in full). The Vitest log of each attempt is in `vitest/`, and the model's responses are in `llm/`. If this happens during generation, the run fails. If it happens in an improvement round, the run completes with the previous tests and records a rejected stage with its `problems`. Try a stronger `--model`, a higher `reasoning_effort`, or a higher `max_repairs`. |
 | `The model did not finish` (length) | Raise `llm_max_output_tokens`. |
-| `OPENAI_API_KEY is not set`, the key was rejected, or the quota is exhausted | The user has to fix the key or its billing. |
+| `OPENAI_API_KEY is not set` (or `ANTHROPIC_API_KEY`), the key was rejected, or the quota is exhausted | The user has to fix the key or its billing. |
 | `… is not available to your API key` | Pick a model from `regress models`. |
 | `The source file changed …` | Stop formatters and watchers that touch the file, then rerun. |
 | `Stryker failed …` or a timeout | Read `stryker/stryker-N.log`. Raise `stryker_timeout`, or test a smaller module. |

@@ -79,6 +79,7 @@ class Pipeline:
             test_file=self.project.test_rel,
             test_file_existed=self.workspace.original_tests is not None,
             model=self.llm.model,
+            provider=getattr(self.llm, "provider", "openai"),
             mutate_lines=list(self.project.mutate_lines),
             batch_id=self.batch_id,
         )

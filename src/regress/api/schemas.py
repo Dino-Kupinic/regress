@@ -8,9 +8,10 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, create_model
 
 from regress.catalog import Source as CatalogSource
-from regress.config import ModelSource, Settings
+from regress.config import FILE_ONLY_SETTINGS, ModelSource, Settings
 from regress.models import Mutant, RunReport, RunStatus, StageKind
 from regress.project import Runner
+from regress.providers import ProviderName
 
 
 class ErrorBody(BaseModel):
@@ -53,7 +54,9 @@ class ProjectInfo(BaseModel):
     toolchain: Toolchain | None = Field(description="How Vitest and Stryker are run; null while something is missing.")
     problems: list[str] = Field(description="What stops a run from starting. Empty when the project is ready.")
     ready: bool
-    api_key_set: bool
+    api_key_set: bool = Field(description="Whether the configured provider's API key is set (or it needs none).")
+    provider: ProviderName = Field(description="The model provider runs use.")
+    api_key_name: str | None = Field(description="The environment variable the key is read from; null if none.")
     active_run: str | None = Field(description="ID of the run in progress, if any.")
 
 
@@ -97,7 +100,11 @@ SettingsUpdate = create_model(
     "SettingsUpdate",
     __config__=ConfigDict(extra="forbid", strict=True),
     __doc__="Keys to change in your user config. Omitted keys stay as they are; null removes a key.",
-    **{name: (field.annotation | None, None) for name, field in Settings.model_fields.items()},
+    **{
+        name: (field.annotation | None, None)
+        for name, field in Settings.model_fields.items()
+        if name not in FILE_ONLY_SETTINGS  # where prompts and keys go is set in files, not over HTTP
+    },
 )
 
 
@@ -116,7 +123,8 @@ class ModelList(BaseModel):
     description: str
     note: str | None = Field(description="Why the list may be out of date.")
     verified: bool = Field(description="Whether the list reflects what the API key can use.")
-    default_model: str
+    provider: ProviderName = Field(description="Whose models these are: the configured provider.")
+    default_model: str | None = Field(description="Null for an OpenAI-compatible server until a model is chosen.")
     model_source: ModelSource
     hidden: int = Field(description="Models left out of this list (older ones and dated snapshots).")
 
@@ -131,7 +139,9 @@ class RunRequest(BaseModel):
 
     source: str = Field(description="Source file to test, relative to the project root, e.g. src/cart.ts.")
     test: str | None = Field(default=None, description="Test file to extend. Found automatically by default.")
-    model: str | None = Field(default=None, description="OpenAI model. Defaults to the configured model.")
+    model: str | None = Field(
+        default=None, description="Model ID, or provider:model to switch provider. Defaults to the configured model."
+    )
     rounds: int | None = Field(default=None, ge=0, le=5, description="Improvement rounds after the first mutation run.")
     baseline: bool = Field(default=False, description="Also mutation-test the existing tests first.")
     generate: bool = Field(

@@ -12,7 +12,16 @@ export type ProjectInfo = {
   problems: string[];
   ready: boolean;
   api_key_set: boolean;
+  provider: Provider;
+  /** The environment variable holding the provider's key; null when it needs none. */
+  api_key_name: string | null;
   active_run: string | null;
+};
+export type Provider = "openai" | "anthropic" | "openai-compatible";
+export const providerLabels: Record<Provider, string> = {
+  openai: "OpenAI",
+  anthropic: "Anthropic",
+  "openai-compatible": "OpenAI-compatible server",
 };
 export type SourceFile = { path: string; size: number };
 export type SourceDetail = {
@@ -23,7 +32,12 @@ export type SourceDetail = {
   lines: number;
 };
 export type Settings = {
-  model: string;
+  provider: Provider;
+  /** Null for an OpenAI-compatible server until a model is chosen. */
+  model: string | null;
+  /** Set in regress.toml or your user config only; the API does not change them. */
+  base_url: string | null;
+  api_key_env: string | null;
   ask_model: boolean;
   reasoning_effort: string | null;
   rounds: number;
@@ -52,7 +66,8 @@ export type ModelList = {
   description: string;
   note: string | null;
   verified: boolean;
-  default_model: string;
+  provider: Provider;
+  default_model: string | null;
   model_source: string;
   hidden: number;
 };
@@ -293,8 +308,10 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(update),
     }),
-  models: (all = false, refresh = false) =>
-    request<ModelList>(`/models?all=${all}&refresh=${refresh}`),
+  models: (all = false, refresh = false, provider?: Provider) =>
+    request<ModelList>(
+      `/models?all=${all}&refresh=${refresh}${provider ? `&provider=${provider}` : ""}`,
+    ),
   runs: () => request<RunSummary[]>("/runs"),
   run: (id: string) => request<RunDetail>(`/runs/${encodeURIComponent(id)}`),
   startRun: (payload: RunRequest) =>

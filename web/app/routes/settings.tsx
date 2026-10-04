@@ -48,7 +48,7 @@ import { Separator } from "~/components/ui/separator";
 import { Skeleton } from "~/components/ui/skeleton";
 import { Spinner } from "~/components/ui/spinner";
 import { Switch } from "~/components/ui/switch";
-import { api, type Settings } from "~/lib/api";
+import { api, type Provider, providerLabels, type Settings } from "~/lib/api";
 import { cn, pageTitle } from "~/lib/utils";
 
 export const meta: MetaFunction = () => [{ title: pageTitle("Settings") }];
@@ -146,11 +146,11 @@ export default function SettingsPage() {
     queryFn: api.project,
     initialData: initial.project,
   }).data;
-  const models = useQuery({
-    queryKey: ["models"],
-    queryFn: () => api.models(),
-  });
   const [draft, setDraft] = useState<Settings>(settings.effective);
+  const models = useQuery({
+    queryKey: ["models", draft.provider],
+    queryFn: () => api.models(false, false, draft.provider),
+  });
   useEffect(() => setDraft(settings.effective), [settings]);
   const changed = Object.entries(draft).filter(
     ([key, value]) => value !== settings.effective[key as keyof Settings],
@@ -188,9 +188,21 @@ export default function SettingsPage() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   });
-  const modelList = models.data?.models ?? [
-    { id: draft.model, created_date: "", newest: false, default: true },
-  ];
+  const modelList =
+    models.data?.models ??
+    (draft.model
+      ? [{ id: draft.model, created_date: "", newest: false, default: true }]
+      : []);
+  const changeProvider = (provider: Provider) =>
+    // A model belongs to one provider: switching starts from the new provider's default.
+    setDraft((old) => ({
+      ...old,
+      provider,
+      model:
+        provider === settings.effective.provider
+          ? settings.effective.model
+          : null,
+    }));
   return (
     <Page>
       <PageHeader
@@ -207,7 +219,7 @@ export default function SettingsPage() {
           <section className="flex flex-col gap-5">
             <SectionHeader
               title="Model"
-              description="Which OpenAI model writes the tests"
+              description="Which provider and model write the tests"
               action={
                 <Button
                   variant="ghost"
@@ -220,6 +232,43 @@ export default function SettingsPage() {
                 </Button>
               }
             />
+            <Field className="max-w-xs">
+              <FieldLabel htmlFor="provider">Provider</FieldLabel>
+              <Select
+                value={draft.provider}
+                onValueChange={(value) => changeProvider(value as Provider)}
+              >
+                <SelectTrigger id="provider" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    {(Object.keys(providerLabels) as Provider[]).map((key) => (
+                      <SelectItem key={key} value={key}>
+                        {providerLabels[key]}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+              {draft.provider === "openai-compatible" && (
+                <FieldDescription>
+                  Server:{" "}
+                  <span className="font-mono">
+                    {settings.effective.base_url ?? "not set"}
+                  </span>
+                  . Set <code className="font-mono">base_url</code> and, if the
+                  server needs a key,{" "}
+                  <code className="font-mono">api_key_env</code> in
+                  regress.toml.
+                </FieldDescription>
+              )}
+            </Field>
+            {models.data?.note && (
+              <p className="text-caption text-muted-foreground">
+                {models.data.note}; {models.data.description}.
+              </p>
+            )}
             <Card className="gap-0 overflow-hidden py-0">
               {models.isPending ? (
                 <div className="flex flex-col gap-3 p-4">
@@ -229,7 +278,7 @@ export default function SettingsPage() {
                 </div>
               ) : (
                 <RadioGroup
-                  value={draft.model}
+                  value={draft.model ?? ""}
                   onValueChange={(value) => update("model", value)}
                   className="max-h-[420px] gap-0 divide-y overflow-y-auto scroll-fade"
                   aria-label="Default model"
@@ -458,9 +507,16 @@ export default function SettingsPage() {
                 <StatusDot
                   tone={project.api_key_set ? "success" : "destructive"}
                 />
-                <span className="flex-1 font-mono text-xs">OPENAI_API_KEY</span>
+                <span className="flex-1 font-mono text-xs">
+                  {project.api_key_name ??
+                    `${providerLabels[project.provider]} key`}
+                </span>
                 <span className="text-caption text-muted-foreground">
-                  {project.api_key_set ? "Set on server" : "Not set"}
+                  {project.api_key_name === null
+                    ? "Not needed"
+                    : project.api_key_set
+                      ? "Set on server"
+                      : "Not set"}
                 </span>
               </div>
             </CardContent>

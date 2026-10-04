@@ -13,7 +13,7 @@ Open **Project setup** at `/setup`. The page shows the served project directory,
 
 Use **Install … packages** when dependencies are missing, or **Check and write config** when they are already installed. This action runs the same setup work as `regress init --yes`: it can change development dependencies and the package lockfile, and writes `regress.toml` only when the file is absent. Installation can take several minutes.
 
-If the API key is missing, set `OPENAI_API_KEY` in the Python server's environment or its working directory's `.env`, then restart `regress serve`. There is no API-key input in the browser.
+If the API key is missing, set the configured provider's key (`OPENAI_API_KEY`, or `ANTHROPIC_API_KEY`) in the Python server's environment or its working directory's `.env`, then restart `regress serve`. There is no API-key input in the browser.
 
 The **Readiness** panel explains what prevents a run from starting. A missing project config is not itself an error; built-in and personal defaults can be used.
 

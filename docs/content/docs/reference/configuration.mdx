@@ -8,7 +8,7 @@ Regress merges settings from several layers. A later layer overrides an earlier 
 1. **Built-in defaults** shipped with Regress.
 2. **Personal config** at `~/.config/regress/config.toml`, or `$XDG_CONFIG_HOME/regress/config.toml` when that variable is set.
 3. **Project config** in `regress.toml` at the project root.
-4. **Environment variables** `REGRESS_MODEL` and `REGRESS_REASONING_EFFORT`.
+4. **Environment variables** `REGRESS_PROVIDER`, `REGRESS_MODEL` and `REGRESS_REASONING_EFFORT`.
 5. **Options on a run**, such as `--model` and `--rounds` on the CLI, or the fields of a run request in the web app and API.
 
 The web app's **Settings** page and `regress models --set` write the personal config. They cannot override a key that `regress.toml` or the environment sets; the page shows where the effective model comes from.
@@ -17,9 +17,12 @@ The web app's **Settings** page and `regress models --set` write the personal co
 
 | Key | Default | Allowed | Meaning |
 | --- | --- | --- | --- |
-| `model` | `gpt-6-luna` | A model ID | OpenAI model that writes and improves tests. |
+| `provider` | `openai` | `openai`, `anthropic`, `openai-compatible` | Who runs the model. See [Model providers](/docs/reference/providers). |
+| `model` | the provider's default | A model ID, or `provider:model` | The model that writes and improves tests: `gpt-6-luna` for OpenAI, `claude-opus-5-5` for Anthropic, none for an OpenAI-compatible server. |
+| `base_url` | unset | An `http(s)://` URL | The provider's API address, required for `openai-compatible`. Not settable through the HTTP API. |
+| `api_key_env` | the provider's | An environment variable name | Where the API key is read from, for example `OPENROUTER_API_KEY`. Not settable through the HTTP API. |
 | `ask_model` | `true` | `true`, `false` | Ask which model to use before a CLI run in an interactive terminal. |
-| `reasoning_effort` | unset | `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` | Reasoning effort for reasoning models. Unset uses the model's default. |
+| `reasoning_effort` | unset | `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` | Reasoning effort for reasoning models. Unset uses the model's default (on Claude models with adaptive thinking, `high`). |
 | `rounds` | `1` | 0–5 | Improvement rounds after the first mutation run. |
 | `max_repairs` | `2` | 0–5 | Retries when a proposed test file fails validation. |
 | `max_mutants` | `40` | 1–200 | Undetected mutants sent to the model per improvement round. When more survive, Regress spreads the selection across the file: one mutant per line and operator first, then duplicates. |
@@ -42,7 +45,10 @@ The web app's Settings page edits the most common keys. Its reasoning-effort cho
 ```toml title="regress.toml"
 # Regress configuration for this project. Command-line flags override these values.
 
+# provider = "openai"  # "openai", "anthropic", or "openai-compatible" (Ollama, vLLM, OpenRouter, ...)
 # model = "gpt-6-luna"   # pin a model for everyone on this project (overrides your personal default)
+# base_url = "http://localhost:11434/v1"  # the server's API, for provider = "openai-compatible"
+# api_key_env = "OPENROUTER_API_KEY"      # environment variable holding that server's key, if it needs one
 # reasoning_effort = "medium"  # for reasoning models (env: REGRESS_REASONING_EFFORT)
 rounds = 1            # improvement rounds driven by surviving mutants
 max_repairs = 2       # retries when a generated test file fails validation
@@ -51,6 +57,7 @@ runner = "auto"       # how to run Vitest and Stryker: "bun", "npx", or "auto"
 # llm_timeout = 120   # seconds without any data from the model before Regress retries (up to 3 attempts)
 # llm_max_duration = 1800  # total seconds allowed for one proposal, including retries
 # llm_max_output_tokens = 32768  # output budget, including model reasoning
+# fail_under = 80     # `regress check` fails below this combined mutation score (percent)
 ```
 
 Commit `regress.toml` to share defaults with your team. Pin `model` here only when everyone should use the same model; it overrides each person's personal default.
@@ -75,8 +82,10 @@ Regress replaces the file atomically when it saves. In the [Docker deployment](/
 
 | Variable | Used by | Purpose |
 | --- | --- | --- |
-| `OPENAI_API_KEY` | Engine, API | Required for generation, improvement, and full evaluations. Read from the environment or a `.env` file found from the working directory upward. |
-| `OPENAI_BASE_URL`, `OPENAI_ORG_ID`, `OPENAI_PROJECT_ID` | Engine | Standard OpenAI SDK settings, also used to key the model-list cache. |
+| `OPENAI_API_KEY` | Engine, API | The OpenAI key, required for generation, improvement, and full evaluations with `provider = "openai"`. Read from the environment or a `.env` file found from the working directory upward. |
+| `ANTHROPIC_API_KEY` | Engine, API | The Anthropic key, for `provider = "anthropic"`. |
+| `REGRESS_PROVIDER` | Engine | Overrides the configured provider. |
+| `OPENAI_BASE_URL`, `OPENAI_ORG_ID`, `OPENAI_PROJECT_ID` | Engine | Standard OpenAI SDK settings, also used to key the model-list cache. `OPENAI_BASE_URL` also serves as `base_url` for `openai-compatible`. |
 | `REGRESS_MODEL` | Engine | Overrides the configured model and skips the CLI model question. |
 | `REGRESS_REASONING_EFFORT` | Engine | Overrides the configured reasoning effort. |
 | `XDG_CONFIG_HOME` | Engine | Moves the personal config directory. |
@@ -88,6 +97,6 @@ The container variables are described in [Deploy the application](/docs/deployme
 
 ## Choosing the model
 
-The model list comes from the OpenAI API and is cached for a day. The CLI and the settings page show the 10 newest text models, plus the current default when it is not already listed. `regress models --all` and `GET /api/models?all=true` add older text models and dated snapshots. If a refresh fails and a cache exists, Regress keeps that cache and notes that the API could not be reached. With no cache, it falls back to the text models known to the installed SDK. That fallback does not prove your key can use them. The short list omits non-text models, shut-down models, and legacy `gpt-3.5` / `gpt-4` IDs. A verified catalog still accepts any other ID your key can use when you type it or pass `--model`.
+The model list comes from the configured provider's API and is cached for a day, per provider (see [Model providers](/docs/reference/providers) for each one's fallback list). The CLI and the settings page show the 10 newest text models, plus the current default when it is not already listed. `regress models --all` and `GET /api/models?all=true` add older text models and dated snapshots. If a refresh fails and a cache exists, Regress keeps that cache and notes that the API could not be reached. With no cache, it falls back to the text models known to the installed SDK. That fallback does not prove your key can use them. The short list omits non-text models, shut-down models, and legacy `gpt-3.5` / `gpt-4` IDs. A verified catalog still accepts any other ID your key can use when you type it or pass `--model`.
 
-The effective model for a run is chosen in this order: `--model` (or the model chosen in the web app's New run panel), `REGRESS_MODEL`, `regress.toml`, the personal config, then the built-in default. A CLI run asks which model to use only when none of the first two is set, `ask_model` is true, and the terminal is interactive. `--yes` also skips the question.
+The effective model for a run is chosen in this order: `--model` (or the model chosen in the web app's New run panel), `REGRESS_MODEL`, `regress.toml`, the personal config, then the provider's default. A layer that changes the provider without naming a model drops the model of the layers below it. A CLI run asks which model to use only when none of the first two is set, `ask_model` is true, and the terminal is interactive. `--yes` also skips the question.
