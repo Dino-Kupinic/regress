@@ -5,7 +5,7 @@ description: Strengthen the Vitest tests for one TypeScript or JavaScript source
 
 # Regress
 
-Regress improves the test file for **one source file at a time**:
+Regress improves the test file for **one source file at a time**. It can run several files in a row, but each file gets its own run:
 
 1. An OpenAI model writes tests for the source file.
 2. StrykerJS makes small deliberate bugs in that file (mutants).
@@ -13,7 +13,7 @@ Regress improves the test file for **one source file at a time**:
 
 Regress keeps the best valid test file and reports the mutation score before and after.
 
-It supports TypeScript and JavaScript projects with **Vitest 2–4**, run through Bun or npx. It does not support Jest, Mocha, Vitest 5, other languages, or whole-project runs.
+It supports TypeScript and JavaScript projects with **Vitest 2–4**, run through Bun or npx. It does not support Jest, Mocha, Vitest 5, other languages, or mutating several files in one Stryker run.
 
 ## Ground rules
 
@@ -73,6 +73,9 @@ Always pass `--yes` (use the configured default model) or `--model MODEL_ID`, so
 | `--test PATH` | Discovery picks the wrong file, or several candidates exist. |
 | `--model ID` | The user named a model. `regress models` lists the models their key can use. |
 | `--verbose` | You need the full validation errors and the model's summaries. |
+| `--changed REF` | The user wants to test what a branch changed. It picks the source files changed since the merge base with `REF` (committed, uncommitted and untracked) and mutates only their changed lines. Each file costs model calls, so confirm the list with the user first. |
+
+Several sources or a directory (`regress run src/ --yes`) run one file after another. A failing file is recorded and the rest still run; the command then exits with code 1. The combined summary is in `.regress/batches/<id>.json`.
 | `--runner bun\|npx` | You need to force the runner. The default, `auto`, prefers Bun. |
 
 **It takes minutes.** Small modules typically take 1–5 minutes, and big files take longer. A proposal may take `llm_max_duration` (30 minutes) and a Stryker run `stryker_timeout` (30 minutes) before Regress gives up. So give the command a long timeout, or run it in the background with its output sent to a file. Without a terminal, Regress prints a progress line every 30 seconds. Don't kill a run because it looks quiet. If you must stop it, send SIGINT (Ctrl-C). Regress then restores the test file and exits with 130.

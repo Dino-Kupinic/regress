@@ -98,6 +98,8 @@ If a run fails or is cancelled, Regress restores the original source and test fi
 | `id`, `created_at` | Run ID and start time with time zone. |
 | `source_file`, `test_file`, `test_file_existed` | Files relative to `project_root`, and whether the test file existed before the run. |
 | `model` | Model used for the run. |
+| `mutate_lines` | The source lines Stryker mutated, as `[start, end]` pairs (1-based, inclusive), in a `--changed` run. Empty when it mutated the whole file. |
+| `batch_id` | The multi-file run this run belongs to, if any. |
 | `status`, `error` | `running`, `completed`, `failed`, or `cancelled`, and the error message if any. |
 | `stages[]` | Each stage's `kind`, `label`, `test_count`, `test_names`, `mutation` results, model `summary`, `attempts`, `llm_seconds`, `targeted_mutants`, `equivalent_mutants`, `rejected`, and `problems`. |
 | `stages[].mutation` | The Stryker run: `mutants[]` with status, operator, location, and covering tests, plus `killed`, `survived`, `no_coverage`, `timeout`, `errors`, and `score`. |
@@ -106,6 +108,23 @@ If a run fails or is cancelled, Regress restores the original source and test fi
 | `duration_seconds` | Wall-clock time of the finished run. |
 
 `events.jsonl` has one JSON object per line with `seq`, `time`, `type`, `message`, and `data`. It is the log the web app shows while a run is live, and the source of [`GET /api/runs/{id}/events`](/docs/reference/http-api#follow-a-run).
+
+## Multi-file runs
+
+A run over several files (`regress run src/`, `regress run --changed main`) saves each file's run as above, plus a summary at `.regress/batches/<id>.json`, where the ID is a timestamp followed by `batch`. It is saved after each file, so it shows how far an interrupted run got.
+
+| Field | Meaning |
+| --- | --- |
+| `id`, `created_at`, `project_root`, `model` | As in a run report. |
+| `changed_since` | The ref given to `--changed`, if any. |
+| `status` | `completed` when every file completed or was skipped, `failed` when any file failed, `cancelled` when interrupted. |
+| `files[]` | One entry per file, in run order. |
+| `files[].source_file`, `files[].run_id` | The file, and its run directory under `.regress/runs/` (none for a skipped file). |
+| `files[].status`, `files[].error` | `completed`, `failed`, `skipped`, `cancelled`, or `pending` (not reached), and why it failed or was skipped. |
+| `files[].mutate_lines` | The lines mutated; empty for the whole file. |
+| `files[].tests_first`, `files[].tests_kept`, `files[].score_first`, `files[].score_kept` | Test counts and scores of the first measured stage and of the kept one. |
+| `files[].detected_first`, `files[].detected_kept`, `files[].valid_mutants` | Mutant counts behind the combined score. |
+| `duration_seconds` | Wall-clock time of the whole run. |
 
 ## Delete old runs
 

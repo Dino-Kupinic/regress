@@ -45,6 +45,8 @@ Or run it from a checkout with `uv run regress ...`.
 ```bash
 regress init                 # check the project, install Vitest + Stryker, write regress.toml
 regress run src/cart.ts      # pick a model, generate, mutation-test, improve, compare
+regress run src/             # every source file in a directory, one after another
+regress run --changed main   # only files this branch changed, mutating only the changed lines
 regress report               # show the latest run (or: --list, <run-id>, --json)
 regress models               # list the latest models, set your default
 regress serve                # HTTP API for the web app on http://127.0.0.1:8765/api
@@ -90,6 +92,7 @@ Useful flags for `regress run`:
 
 | Flag | Meaning |
 |---|---|
+| `--changed REF` | Only source files changed since `REF` (for example `main`), and only their changed lines. See [Several files at once](#several-files-at-once). |
 | `--test/-t PATH` | Test file to extend. By default it's found next to the source, in `__tests__/`, or under `test/`, `tests/` or `spec/`, and created if missing. |
 | `--rounds N` | Improvement rounds after the first mutation run (default 1). |
 | `--baseline` | Also mutation-test the existing tests first, for a before/after against them. |
@@ -97,6 +100,24 @@ Useful flags for `regress run`:
 | `--model/-m` | OpenAI model for this run; skips the model question. |
 | `--yes/-y` | Ask nothing; use the default model. |
 | `--verbose/-v` | Show full validation errors and the model's summaries. |
+
+### Several files at once
+
+`regress run` takes several source files or directories. A directory stands for every source file under it, leaving out tests, configs, type declarations and nested projects with their own `package.json`. Files run one after another, each with its own run directory, and a summary table follows:
+
+```text
+Changed since main
+File               Lines   Tests  First  Kept      Δ  Status
+src/cart.ts        46     5 → 27     0%  100%  +100%  completed
+src/slugify.ts     —           —      —     —      —  skipped
+Combined (1 file)                    0%  100%  +100%
+```
+
+This is a scripted-model run where one line of `src/cart.ts` changed (one mutant) and only a comment of `src/slugify.ts`.
+
+`--changed REF` limits the run to source files git sees as changed since the merge base of `REF` and `HEAD`, so `main` means "what this branch changed", including uncommitted and untracked files. Stryker then mutates only the changed lines, so mutation runs are faster and the surviving mutants sent to the model are about the code you touched. A file where only comments, imports or blank lines changed is skipped. With paths, `--changed` keeps only the changed files under them; without, it looks under the current directory.
+
+Before a run over several files, Regress lists them and asks to go on, since each one costs model calls (`--yes` skips this). A file that fails is recorded and the others still run; the command then exits with code 1. **Combined** adds up the mutants of every file scored in both columns. The summary is saved to `.regress/batches/<id>.json`. `--test` works only with a single source file.
 
 ### Choosing a model
 
@@ -169,7 +190,7 @@ Each run writes `.regress/runs/<timestamp>-<name>/`. The directory ignores itsel
 
 | Path | Contents |
 |---|---|
-| `report.json` | Stages, test counts, every mutant with its status, token usage |
+| `report.json` | Stages, test counts, every mutant with its status, token usage, the mutated lines of a `--changed` run |
 | `events.jsonl` | Progress log, for runs started over the [HTTP API](#http-api) |
 | `tests/` | Each accepted version of the test file |
 | `llm/` | Every prompt and structured response |
@@ -327,6 +348,7 @@ Code map (`src/regress/`):
 |---|---|
 | `cli.py` | Typer commands |
 | `pipeline.py` | The generate → validate → mutate → improve loop |
+| `batch.py`, `changes.py` | Multi-file runs, and the changed lines from `git diff` |
 | `project.py` | Project, toolchain and test-file discovery |
 | `vitest.py`, `stryker.py` | Tool adapters |
 | `validate.py` | Candidate checks |
@@ -340,4 +362,4 @@ Code map (`src/regress/`):
 
 ## Scope and roadmap
 
-Regress covers TypeScript/JavaScript with Vitest and StrykerJS, one source file and one test file at a time, through the CLI or web app. Hosted deployments serve one trusted project and one operator group per instance. Independent users or untrusted repositories require separate isolated workers, credentials and storage.
+Regress covers TypeScript/JavaScript with Vitest and StrykerJS. Each run pairs one source file with one test file; the CLI can run several files in a row (`regress run src/`, `--changed main`), the web app one at a time. Hosted deployments serve one trusted project and one operator group per instance. Independent users or untrusted repositories require separate isolated workers, credentials and storage.
