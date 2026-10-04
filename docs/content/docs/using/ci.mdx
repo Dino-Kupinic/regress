@@ -1,0 +1,106 @@
+---
+title: Continuous integration
+description: Gate pull requests on the mutation score of the changed code, without calling the model, and comment the surviving mutants.
+---
+
+`regress check` mutation-tests the tests a project already has. It never calls the model and needs no API key, so it is free to run on every pull request and gives the same answer every time for the same code.
+
+```bash
+regress check src/cart.ts
+regress check src/ --fail-under 80
+regress check --changed origin/main --fail-under 80 --markdown comment.md
+regress check --changed main --json
+```
+
+It takes source files, directories, and `--changed REF` exactly like [`regress run`](/docs/using/cli#several-files-or-only-what-changed): with `--changed`, only the source files changed since the merge base with `REF` are checked, and Stryker mutates only their changed lines. For each file, Regress runs the existing test file with Vitest, then mutation-tests it with Stryker. It writes nothing outside `.regress/`.
+
+| Option | Behavior |
+| --- | --- |
+| `--changed REF` | Only source files changed since `REF`, and only their changed lines. |
+| `--fail-under PERCENT` | Exit with code 1 when the combined mutation score is below this, or when a checked file has no test file. Also settable as `fail_under` in `regress.toml`. |
+| `--json` | Print the check report as JSON on standard output, and nothing else. |
+| `--markdown PATH` | Also write a pull request comment to `PATH`. |
+| `--mutants N` | Surviving mutants to list per file; default 5. |
+| `--runner auto\|bun\|npx` | Runner override. |
+
+## Results
+
+Each file ends up with one of these statuses:
+
+- **scored**: the existing tests pass and Stryker ran. The file has a score unless its changed lines produced no mutants.
+- **no tests**: Regress found no test file for it. With a threshold, this fails the check.
+- **skipped**: only comments, imports or blank lines changed.
+- **error**: the existing tests fail, or a tool failed. This always fails the check.
+
+The **combined score** counts every mutant of the scored files together, so a file with many mutants weighs more than one with a few. Without `--fail-under`, `check` fails only on errors. If nothing changed, it passes.
+
+The report and the Vitest and Stryker artifacts of each file are saved in `.regress/checks/<id>/`. See [Reports](/docs/reference/reports#checks).
+
+## GitHub Actions
+
+This workflow checks every pull request's changed code, fails below 80%, and keeps one comment on the pull request up to date with the scores and surviving mutants. Adjust the setup steps to your project: the package manager, and the `working-directory` if the JavaScript project is not at the repository root.
+
+```yaml title=".github/workflows/mutation-check.yml"
+name: Mutation check
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write # to comment
+
+jobs:
+  regress:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # --changed needs the base branch's history
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: uv tool install git+https://github.com/Dino-Kupinic/regress
+
+      - name: Check the changed code
+        run: >
+          regress check --changed "origin/${{ github.base_ref }}"
+          --fail-under 80 --markdown regress-comment.md
+
+      - name: Comment on the pull request
+        if: always() && hashFiles('regress-comment.md') != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          id=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
+            --jq '.[] | select(.body | startswith("<!-- regress-check -->")) | .id' | head -n 1)
+          if [ -n "$id" ]; then
+            gh api --method PATCH "repos/$REPO/issues/comments/$id" -F body=@regress-comment.md
+          else
+            gh pr comment "$PR" --repo "$REPO" --body-file regress-comment.md
+          fi
+```
+
+The comment starts with the hidden marker `<!-- regress-check -->`, which is how the second step finds and updates it instead of adding a new one on every push. It shows the verdict, a table of files with their changed lines, test counts, detected mutants and scores, and the surviving mutants as diffs:
+
+````markdown
+**EqualityOperator** · `src/cart.ts:26` (survived)
+```diff
+- if (price < 0) {
++ if (price <= 0) {
+```
+````
+
+Pull requests from forks get a read-only token, so the comment step fails there; the check itself still runs and gates.
+
+For other CI systems, use `--json` and read `files[].score`, `files[].status` and the exit code. The JSON has the same fields as `check.json`.
+
+## Writing the missing tests
+
+The check never spends money. Writing tests for the surviving mutants does, so keep that step manual: run `regress run --changed origin/main` locally, or add a separate workflow that runs only on `workflow_dispatch` with an `OPENAI_API_KEY` secret and uploads the changed test files for review. Regress executes model-written test code, so run such a job only on branches you trust.

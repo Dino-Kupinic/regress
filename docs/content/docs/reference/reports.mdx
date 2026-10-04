@@ -126,6 +126,20 @@ A run over several files (`regress run src/`, `regress run --changed main`) save
 | `files[].detected_first`, `files[].detected_kept`, `files[].valid_mutants` | Mutant counts behind the combined score. |
 | `duration_seconds` | Wall-clock time of the whole run. |
 
+## Checks
+
+`regress check` saves `.regress/checks/<id>/check.json`, where the ID is a timestamp followed by `check`, with each file's Vitest and Stryker artifacts in numbered subdirectories (`01/vitest/`, `01/stryker/`).
+
+| Field | Meaning |
+| --- | --- |
+| `id`, `created_at`, `project_root`, `changed_since` | As in a multi-file run. |
+| `fail_under` | The threshold, if any. |
+| `files[].source_file`, `files[].test_file`, `files[].mutate_lines` | The file, its test file, and the lines mutated (empty for the whole file). |
+| `files[].status`, `files[].error` | `scored`, `no-tests`, `skipped`, `failed`, or `pending` (not reached), and the reason. |
+| `files[].tests`, `files[].killed`, `files[].timeout`, `files[].survived`, `files[].no_coverage`, `files[].score` | The test count, the mutant counts, and the score. |
+| `files[].survivors[]` | Undetected mutants spread across the file: `id`, `mutator`, `status`, `line`, and the `original` and `mutated` line. |
+| `duration_seconds` | Wall-clock time of the check. |
+
 ## Delete old runs
 
 Artifacts are kept until you remove them. Delete a finished run's directory, or call `DELETE /api/runs/{id}` on a running API. Deleting a run does not touch the test file in your project.

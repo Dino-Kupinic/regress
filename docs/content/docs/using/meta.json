@@ -1,4 +1,4 @@
 {
   "title": "Using Regress",
-  "pages": ["index", "web-app", "cli", "evaluations", "agents"]
+  "pages": ["index", "web-app", "cli", "ci", "evaluations", "agents"]
 }

@@ -18,6 +18,7 @@ It supports TypeScript and JavaScript projects with **Vitest 2–4**, run throug
 ## Ground rules
 
 - **Runs cost money.** `regress run` and `regress eval` (without `--oracle`) call the OpenAI API on the user's key. Start a run only when the user asked for one. Ask before running Regress over several files.
+- **`regress check` is free.** It mutation-tests the existing tests without the model and needs no API key. Use it to measure a file before suggesting a paid run (`regress check src/cart.ts`), or to see which mutants survive (`--json`).
 - **Runs execute model-written test code** on this machine, as any test an assistant writes would.
 - **Regress rewrites the test file.** A run that fails or is interrupted restores the original file. A run that completes leaves the kept version in place, uncommitted. Check `git status` first, so the diff you show afterwards is only Regress's.
 - **Run one job per project at a time.** Don't run two runs at once. Don't start a CLI run while `regress serve` is serving the same project. Don't edit, format or watch-rebuild the source file during a run: Regress aborts if it changes.
