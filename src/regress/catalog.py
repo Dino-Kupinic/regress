@@ -1,4 +1,4 @@
-"""Which OpenAI models can write tests: fetched from the API, cached, with an offline fallback."""
+"""Which models can write tests: fetched from the provider's API, cached, with an offline fallback."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from typing import Literal
 import openai
 
 from regress.config import atomic_write_text, user_cache_dir
+from regress.providers import PROVIDERS, api_key
 
 CACHE_FILE = "models.json"
 CACHE_TTL_SECONDS = 24 * 60 * 60
@@ -29,7 +30,12 @@ _NOT_FOR_TEXT = (
     "embedding", "tts", "whisper", "dall-e", "audio", "realtime", "transcribe", "search",
     "image", "moderation", "instruct", "computer-use", "deep-research", "sora", "live",
 )  # fmt: skip
-_SNAPSHOT = re.compile(r"-\d{4}-\d{2}-\d{2}$|^ft:")
+_SNAPSHOT = re.compile(r"-\d{4}-\d{2}-\d{2}$|^ft:|^claude-.*-\d{8}$")
+# Current Claude models, newest first, for when the Models API can't be reached.
+ANTHROPIC_MODELS = (
+    "claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5", "claude-opus-5", "claude-sonnet-5",
+    "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5",
+)  # fmt: skip
 
 Source = Literal["api", "cache", "sdk"]
 
@@ -56,6 +62,7 @@ class Catalog:
     fetched_at: float | None = None
     note: str | None = None
     all_ids: frozenset[str] = field(default_factory=frozenset)  # every model the key can use
+    provider: str = "openai"
 
     def __post_init__(self) -> None:
         self.all_ids = frozenset(self.all_ids) | {m.id for m in self.models}
@@ -77,14 +84,23 @@ class Catalog:
         return difflib.get_close_matches(model_id, sorted(self.all_ids), n=3, cutoff=0.6)
 
     def describe(self) -> str:
+        where = {"openai": "the OpenAI API", "anthropic": "the Anthropic API"}.get(self.provider, "the model server")
         if self.source == "api":
-            return "fetched from the OpenAI API just now"
+            return f"fetched from {where} just now"
         if self.source == "cache":
-            return f"from the OpenAI API, cached {_ago(self.fetched_at)}"
+            return f"from {where}, cached {_ago(self.fetched_at)}"
+        if self.provider == "anthropic":
+            return "Regress's list of current Claude models"
+        if self.provider == "openai-compatible":
+            return "no list available"
         return f"bundled with the openai SDK {openai.__version__}"
 
 
-def is_text_model(model_id: str) -> bool:
+def is_text_model(model_id: str, provider: str = "openai") -> bool:
+    if provider == "anthropic":
+        return model_id.startswith("claude-")
+    if provider != "openai":
+        return True  # a self-hosted server lists what it serves
     base = model_id.removeprefix("ft:")
     return bool(_TEXT_MODEL.match(model_id)) and not _LEGACY.match(base) and not any(x in base for x in _NOT_FOR_TEXT)
 
@@ -93,64 +109,122 @@ def is_snapshot(model_id: str) -> bool:
     return bool(_SNAPSHOT.search(model_id))
 
 
-def usable(models: typing.Iterable[ModelInfo], today: date | None = None) -> list[ModelInfo]:
+def usable(models: typing.Iterable[ModelInfo], today: date | None = None, provider: str = "openai") -> list[ModelInfo]:
     """Text models that are not shut down yet, newest first."""
     today = today or date.today()
-    kept = [m for m in models if is_text_model(m.id) and not _shut_down(m.shutdown_date, today)]
+    kept = [m for m in models if is_text_model(m.id, provider) and not _shut_down(m.shutdown_date, today)]
     return sorted(kept, key=lambda m: (m.created or 0, m.id), reverse=True)
 
 
-def fetch_catalog(client: openai.OpenAI) -> Catalog:
-    everything = [ModelInfo(m.id, m.created, getattr(m, "shutdown_date", None)) for m in client.models.list()]
-    return Catalog(usable(everything), "api", fetched_at=time.time(), all_ids=frozenset(m.id for m in everything))
+def fetch_catalog(client, provider: str = "openai") -> Catalog:
+    everything = [_model_info(m) for m in client.models.list()]
+    return Catalog(
+        usable(everything, provider=provider),
+        "api",
+        fetched_at=time.time(),
+        all_ids=frozenset(m.id for m in everything),
+        provider=provider,
+    )
 
 
-def sdk_models() -> list[ModelInfo]:
-    """Model names known to the installed SDK, which lists them newest first."""
+def _model_info(model: object) -> ModelInfo:
+    created = getattr(model, "created", None)
+    if created is None and isinstance(getattr(model, "created_at", None), datetime):  # Anthropic
+        created = int(model.created_at.timestamp())
+    return ModelInfo(model.id, created if type(created) is int else None, getattr(model, "shutdown_date", None))
+
+
+def sdk_models(provider: str = "openai") -> list[ModelInfo]:
+    """Model names known offline, newest first: the openai SDK's list, or Regress's list of Claude models."""
+    if provider == "anthropic":
+        return [ModelInfo(model_id) for model_id in ANTHROPIC_MODELS]
+    if provider != "openai":
+        return []
     from openai.types.shared.chat_model import ChatModel
 
     return [ModelInfo(model_id) for model_id in typing.get_args(ChatModel) if is_text_model(model_id)]
 
 
-def load_catalog(refresh: bool = False, client: openai.OpenAI | None = None) -> Catalog:
-    """Models available to the API key: cached for a day, refreshed from the API, or the SDK's list."""
-    scope = _cache_scope(client)
-    cached = _read_cache(scope)
+def load_catalog(
+    refresh: bool = False,
+    client=None,
+    provider: str = "openai",
+    base_url: str | None = None,
+    api_key_env: str | None = None,
+) -> Catalog:
+    """Models available to the API key: cached for a day, refreshed from the API, or a built-in list."""
+    scope = _cache_scope(client, provider, base_url, api_key_env)
+    cached = _read_cache(scope, provider)
     if cached and not refresh and time.time() - (cached.fetched_at or 0) < CACHE_TTL_SECONDS:
         return cached
     owns_client = client is None
-    if owns_client and not os.environ.get("OPENAI_API_KEY", "").strip():
-        return cached or Catalog(sdk_models(), "sdk", note="OPENAI_API_KEY is not set")
+    offline = Catalog(sdk_models(provider), "sdk", provider=provider)
+    key = api_key(provider, api_key_env)
+    if owns_client and key is None and PROVIDERS[provider].key_required:
+        offline.note = f"{PROVIDERS[provider].key_env} is not set"
+        return cached or offline
+    if owns_client and provider == "openai-compatible" and not (base_url or os.environ.get("OPENAI_BASE_URL")):
+        offline.note = "base_url is not set"
+        return cached or offline
+    errors: tuple[type[Exception], ...] = (openai.OpenAIError,)
     try:
         if client is None:
-            client = openai.OpenAI(timeout=15, max_retries=1)
-        catalog = fetch_catalog(client)
-    except openai.OpenAIError as error:
-        reason = f"could not reach the OpenAI API ({type(error).__name__})"
+            client = _list_client(provider, base_url, key)
+        if provider == "anthropic":
+            import anthropic
+
+            errors = (anthropic.AnthropicError,)
+        catalog = fetch_catalog(client, provider)
+    except errors as error:
+        where = {"openai": "the OpenAI API", "anthropic": "the Anthropic API"}.get(provider, "the model server")
+        reason = f"could not reach {where} ({type(error).__name__})"
         if cached:
             cached.note = reason
             return cached
-        return Catalog(sdk_models(), "sdk", note=reason)
+        offline.note = reason
+        return offline
     finally:
         if owns_client and client is not None:
             client.close()
-    _write_cache(catalog, scope)
+    _write_cache(catalog, scope, provider)
     return catalog
 
 
-def _cache_scope(client: openai.OpenAI | None) -> str:
-    """A cache from another credential, project, or endpoint cannot verify this user's models."""
-    values = (
-        getattr(client, "api_key", os.environ.get("OPENAI_API_KEY", "")),
-        str(getattr(client, "base_url", os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1"))).rstrip("/"),
-        getattr(client, "organization", os.environ.get("OPENAI_ORG_ID")),
-        getattr(client, "project", os.environ.get("OPENAI_PROJECT_ID")),
-    )
+def _list_client(provider: str, base_url: str | None, key: str | None):
+    if provider == "anthropic":
+        import anthropic
+
+        return anthropic.Anthropic(api_key=key, base_url=base_url, timeout=15, max_retries=1)
+    if provider == "openai-compatible":
+        return openai.OpenAI(base_url=base_url or None, api_key=key or "not-needed", timeout=15, max_retries=1)
+    return openai.OpenAI(base_url=base_url or None, timeout=15, max_retries=1)
+
+
+def _cache_scope(client, provider: str = "openai", base_url: str | None = None, api_key_env: str | None = None) -> str:
+    """A cache from another provider, credential, project, or endpoint cannot verify this user's models."""
+    if provider == "openai":
+        default_url = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
+        values: tuple = (
+            getattr(client, "api_key", os.environ.get("OPENAI_API_KEY", "")),
+            str(getattr(client, "base_url", base_url or default_url)).rstrip("/"),
+            getattr(client, "organization", os.environ.get("OPENAI_ORG_ID")),
+            getattr(client, "project", os.environ.get("OPENAI_PROJECT_ID")),
+        )
+    else:
+        values = (
+            provider,
+            getattr(client, "api_key", api_key(provider, api_key_env) or ""),
+            str(getattr(client, "base_url", base_url or os.environ.get("OPENAI_BASE_URL", ""))).rstrip("/"),
+        )
     return hashlib.sha256(json.dumps(values).encode()).hexdigest()
 
 
-def _read_cache(scope: str) -> Catalog | None:
-    path = user_cache_dir() / CACHE_FILE
+def _cache_path(provider: str):
+    return user_cache_dir() / (CACHE_FILE if provider == "openai" else f"models-{provider}.json")
+
+
+def _read_cache(scope: str, provider: str = "openai") -> Catalog | None:
+    path = _cache_path(provider)
     try:
         with path.open(encoding="utf-8") as handle:
             raw = handle.read(MAX_CACHE_BYTES + 1)
@@ -185,7 +259,13 @@ def _read_cache(scope: str) -> Catalog | None:
                     return None
                 date.fromisoformat(model.shutdown_date[:10])
             models.append(model)
-        return Catalog(usable(models), "cache", fetched_at=fetched_at, all_ids=frozenset(all_ids))
+        return Catalog(
+            usable(models, provider=provider),
+            "cache",
+            fetched_at=fetched_at,
+            all_ids=frozenset(all_ids),
+            provider=provider,
+        )
     except (OSError, ValueError, KeyError, TypeError, OverflowError, RecursionError):
         return None
 
@@ -199,8 +279,8 @@ def _valid_id(value: object) -> bool:
     )
 
 
-def _write_cache(catalog: Catalog, scope: str) -> None:
-    path = user_cache_dir() / CACHE_FILE
+def _write_cache(catalog: Catalog, scope: str, provider: str = "openai") -> None:
+    path = _cache_path(provider)
     try:
         payload = {
             "scope": scope,

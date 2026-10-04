@@ -11,14 +11,20 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, ValidationError
 
 from regress.errors import ProjectError
+from regress.providers import PROVIDERS, ProviderName, split_model
 
 CONFIG_FILE = "regress.toml"
-DEFAULT_MODEL = "gpt-6-luna"
+DEFAULT_MODEL = PROVIDERS["openai"].default_model
+# Settings the HTTP API may not change: together they decide where prompts and an API key are sent.
+FILE_ONLY_SETTINGS = frozenset({"base_url", "api_key_env"})
 
 CONFIG_TEMPLATE = """\
 # Regress configuration for this project. Command-line flags override these values.
 
+# provider = "openai"  # "openai", "anthropic", or "openai-compatible" (Ollama, vLLM, OpenRouter, ...)
 # model = "gpt-6-luna"   # pin a model for everyone on this project (overrides your personal default)
+# base_url = "http://localhost:11434/v1"  # the server's API, for provider = "openai-compatible"
+# api_key_env = "OPENROUTER_API_KEY"      # environment variable holding that server's key, if it needs one
 # reasoning_effort = "medium"  # for reasoning models (env: REGRESS_REASONING_EFFORT)
 rounds = 1            # improvement rounds driven by surviving mutants
 max_repairs = 2       # retries when a generated test file fails validation
@@ -33,6 +39,7 @@ runner = "auto"       # how to run Vitest and Stryker: "bun", "npx", or "auto"
 USER_CONFIG_HEADER = "# Your personal Regress defaults. Manage them with `regress models`.\n"
 
 ModelSource = Literal["built-in default", "user config", "regress.toml", "REGRESS_MODEL", "--model"]
+_ENV_NAME = r"^[A-Za-z_][A-Za-z0-9_]{0,127}$"
 ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]
 _USER_CONFIG_LOCK = threading.RLock()
 
@@ -40,7 +47,11 @@ _USER_CONFIG_LOCK = threading.RLock()
 class Settings(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, str_strip_whitespace=True, validate_assignment=True)
 
-    model: str = Field(default=DEFAULT_MODEL, min_length=1, max_length=256, pattern=r"^[^\s\x00-\x1f\x7f]+$")
+    provider: ProviderName = "openai"
+    # None only for a provider without a default model (openai-compatible) that nobody chose one for yet.
+    model: str | None = Field(default=DEFAULT_MODEL, min_length=1, max_length=256, pattern=r"^[^\s\x00-\x1f\x7f]+$")
+    base_url: str | None = Field(default=None, max_length=2048, pattern=r"^https?://[^\s\x00-\x1f\x7f]+$")
+    api_key_env: str | None = Field(default=None, pattern=_ENV_NAME)
     ask_model: bool = True
     reasoning_effort: ReasoningEffort | None = None
     rounds: int = Field(default=1, ge=0, le=5)
@@ -80,11 +91,19 @@ def load_settings(root: Path | None, **overrides: object) -> Settings:
     """Merge settings, later layers winning. None-valued overrides are ignored.
 
     built-in defaults < user config (~/.config/regress/config.toml) < project regress.toml
-    < environment (REGRESS_MODEL, REGRESS_REASONING_EFFORT) < command-line flags
+    < environment (REGRESS_PROVIDER, REGRESS_MODEL, REGRESS_REASONING_EFFORT) < command-line flags
+
+    A model may name its provider (`anthropic:claude-opus-5-5`). A layer that switches the provider
+    without naming a model drops the model of the layers below it, which belongs to another provider:
+    the new provider's default model applies instead.
     """
     env = {
         key: os.environ[variable]
-        for key, variable in (("model", "REGRESS_MODEL"), ("reasoning_effort", "REGRESS_REASONING_EFFORT"))
+        for key, variable in (
+            ("provider", "REGRESS_PROVIDER"),
+            ("model", "REGRESS_MODEL"),
+            ("reasoning_effort", "REGRESS_REASONING_EFFORT"),
+        )
         if os.environ.get(variable)
     }
     layers: list[tuple[ModelSource, Path | None, dict[str, object]]] = [
@@ -96,14 +115,32 @@ def load_settings(root: Path | None, **overrides: object) -> Settings:
     data: dict[str, object] = {}
     source: ModelSource = "built-in default"
     for name, path, layer in layers:
+        layer = _split_provider(layer)
         if path is not None:
             _validate(layer, str(path))
+        if "provider" in layer and "model" not in layer and layer["provider"] != data.get("provider", "openai"):
+            data.pop("model", None)
+            source = "built-in default"
         data.update(layer)
         if "model" in layer:
             source = name
+    if "model" not in data:
+        provider = data.get("provider", "openai")
+        data["model"] = PROVIDERS[provider].default_model if provider in PROVIDERS else None
     settings = _validate(data, f"{CONFIG_FILE}, user config, or flags")
     settings._model_source = source
     return settings
+
+
+def _split_provider(layer: dict[str, object]) -> dict[str, object]:
+    """`model = "anthropic:claude-opus-5-5"` sets the provider too."""
+    model = layer.get("model")
+    if not isinstance(model, str):
+        return layer
+    prefix, model_id = split_model(model.strip())
+    if prefix is None:
+        return layer
+    return {**layer, "provider": prefix, "model": model_id}
 
 
 def user_settings() -> dict[str, object]:

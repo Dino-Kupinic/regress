@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import dataclasses
-import os
 import sys
 from pathlib import Path
 from typing import Annotated, Literal, NoReturn
@@ -27,7 +26,7 @@ from regress.config import (
 from regress.errors import ProjectError, RegressError, ToolError
 from regress.evaluation import COUNTING_NOTE, EvalResult, evaluate_oracles, evaluate_regress, load_suites
 from regress.files import atomic_write_text
-from regress.llm import OpenAILLM, require_api_key
+from regress.llm import create_llm, require_api_key
 from regress.pipeline import Pipeline, RunOptions
 from regress.process import run_command
 from regress.project import (
@@ -40,6 +39,7 @@ from regress.project import (
     package_version,
     planned_installs,
 )
+from regress.providers import PROVIDERS, missing_key, qualified_model, split_model
 from regress.store import RunStore, regress_dir
 from regress.ui import (
     ConsoleReporter,
@@ -84,15 +84,31 @@ def _interactive() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
 
 
+def _catalog(settings: Settings, refresh: bool = False):
+    return load_catalog(
+        refresh, provider=settings.provider, base_url=settings.base_url, api_key_env=settings.api_key_env
+    )
+
+
 def _pick_model(settings: Settings, yes: bool) -> str:
-    """The model for this run: asked interactively unless it was given, remembered, or we can't ask."""
+    """The model for this run: asked interactively unless it was given, remembered, or we can't ask.
+
+    A typed `provider:model` switches the provider of `settings` for this run.
+    """
     if yes or settings.model_is_explicit or not settings.ask_model or not _interactive():
+        if settings.model is None:
+            raise ProjectError(
+                f"No model chosen for provider {settings.provider}. Pass --model or set model in regress.toml."
+            )
         return settings.model
     with console.status("[dim]Fetching available models...[/]"):
-        catalog = load_catalog()
-    model, remember = choose_model(console, catalog, settings.model)
+        catalog = _catalog(settings)
+    answer, remember = choose_model(console, catalog, settings.model)
+    prefix, model = split_model(answer)
+    if prefix is not None:
+        settings.provider = prefix
     if remember:
-        path = save_user_settings(model=model, ask_model=False)
+        path = save_user_settings(model=qualified_model(settings.provider, model), ask_model=False)
         console.print(f"[dim]Saved to {escape(str(path))}. Change it any time with `regress models`.[/]")
         if settings.model_source == "regress.toml" and model != settings.model:
             console.print(
@@ -184,7 +200,8 @@ def run(
             project = dataclasses.replace(load_project(target.source, test, settings.runner), mutate_lines=tuple(lines))
         elif not yes and _interactive():
             _confirm_targets(root, targets, changed)
-        require_api_key()
+        chosen = _pick_model(settings, yes)
+        require_api_key(settings.provider, settings.api_key_env)
         options = RunOptions(
             rounds=settings.rounds,
             max_repairs=settings.max_repairs,
@@ -194,13 +211,7 @@ def run(
             vitest_timeout=settings.vitest_timeout,
             stryker_timeout=settings.stryker_timeout,
         )
-        with OpenAILLM(
-            _pick_model(settings, yes),
-            settings.reasoning_effort,
-            idle_timeout=settings.llm_timeout,
-            max_duration=settings.llm_max_duration,
-            max_output_tokens=settings.llm_max_output_tokens,
-        ) as llm:
+        with create_llm(settings, chosen) as llm:
             if single and len(targets) == 1:
                 Pipeline(project, llm, options, ConsoleReporter(console, verbose)).run()
                 return
@@ -354,8 +365,10 @@ def init(
             atomic_write_text(config, CONFIG_TEMPLATE)
             console.print(f"[green]✓[/] Wrote {CONFIG_FILE}")
         console.print("[green]✓[/] Created .regress/ for run artifacts (git-ignored)")
-        if not os.environ.get("OPENAI_API_KEY"):
-            console.print("[yellow]![/] OPENAI_API_KEY is not set. Export it or add it to a .env file.")
+        settings = load_settings(root)
+        missing = missing_key(settings.provider, settings.api_key_env)
+        if missing:
+            console.print(f"[yellow]![/] {escape(missing)}")
         console.print("\nNext: [bold]regress run src/<file>.ts[/]")
     except RegressError as error:
         _fail(error)
@@ -364,7 +377,14 @@ def init(
 @app.command()
 def models(
     set_model: Annotated[
-        str | None, typer.Option("--set", help="Make this your default model (saved in your user config).")
+        str | None,
+        typer.Option(
+            "--set", help="Make this your default model (saved in your user config). provider:model switches provider."
+        ),
+    ] = None,
+    provider_name: Annotated[
+        str | None,
+        typer.Option("--provider", help="List this provider's models: openai, anthropic or openai-compatible."),
     ] = None,
     ask: Annotated[
         bool | None, typer.Option("--ask/--no-ask", help="Whether `regress run` asks which model to use.")
@@ -376,24 +396,29 @@ def models(
 ) -> None:
     """List the latest models and choose your default."""
     try:
+        root = _project_root_or_none(Path.cwd())
+        prefix, model_id = split_model(set_model) if set_model is not None else (None, None)
+        if provider_name is not None and provider_name not in PROVIDERS:
+            raise RegressError(f"Unknown provider {provider_name}. Expected one of: {', '.join(PROVIDERS)}.")
+        settings = load_settings(root, provider=prefix or provider_name)
         with console.status("[dim]Fetching available models...[/]"):
-            catalog = load_catalog(refresh=refresh)
+            catalog = _catalog(settings, refresh)
         changes: dict[str, object] = {}
-        if set_model is not None:
-            if catalog.verified and not catalog.has(set_model):
-                hint = catalog.suggestions(set_model)
+        if model_id is not None:
+            if catalog.verified and not catalog.has(model_id):
+                hint = catalog.suggestions(model_id)
                 suffix = f" Did you mean {', '.join(hint)}?" if hint else " See `regress models --all`."
-                raise RegressError(f"{set_model} is not available to your API key.{suffix}")
-            changes["model"] = set_model
+                raise RegressError(f"{model_id} is not available to your API key.{suffix}")
+            changes["model"] = qualified_model(settings.provider, model_id)
         if ask is not None:
             changes["ask_model"] = ask
         if changes:
             path = save_user_settings(**changes)
             console.print(f"[green]✓[/] Saved to {escape(str(path))}\n")
-        settings = load_settings(_project_root_or_none(Path.cwd()))
-        render_models(console, catalog, settings, user_config_path(), show_all)
-        if set_model is not None and settings.model != set_model:
-            console.print(f"[yellow]! {settings.model_source} overrides your default here.[/]")
+        shown = load_settings(root, provider=provider_name) if provider_name else load_settings(root)
+        render_models(console, catalog, shown, user_config_path(), show_all)
+        if model_id is not None and (shown.provider, shown.model) != (settings.provider, model_id):
+            console.print(f"[yellow]! {shown.model_source} overrides your default here.[/]")
     except RegressError as error:
         _fail(error)
 
@@ -473,8 +498,8 @@ def eval_command(
             with console.status("[dim]Checking hidden bugs against the oracle tests...[/]"):
                 result = evaluate_oracles(examples, suites, settings.runner, on_module=None)
         else:
-            require_api_key()
             chosen = _pick_model(settings, yes)
+            require_api_key(settings.provider, settings.api_key_env)
             options = RunOptions(
                 rounds=settings.rounds,
                 max_repairs=settings.max_repairs,
@@ -485,13 +510,7 @@ def eval_command(
             result = evaluate_regress(
                 examples,
                 suites,
-                lambda: OpenAILLM(
-                    chosen,
-                    settings.reasoning_effort,
-                    idle_timeout=settings.llm_timeout,
-                    max_duration=settings.llm_max_duration,
-                    max_output_tokens=settings.llm_max_output_tokens,
-                ),
+                lambda: create_llm(settings, chosen),
                 options,
                 ConsoleReporter(console, verbose),
                 settings.runner,

@@ -337,7 +337,7 @@ def test_picker_always_offers_the_default():
 def picker_calls(monkeypatch):
     calls = []
     monkeypatch.setattr(cli, "_interactive", lambda: True)
-    monkeypatch.setattr(cli, "load_catalog", lambda: CATALOG)
+    monkeypatch.setattr(cli, "load_catalog", lambda *a, **k: CATALOG)
 
     def fake_choose(console, catalog, default):
         calls.append(default)
@@ -373,7 +373,7 @@ def test_does_not_ask_when_told_or_when_it_cannot(tmp_path, picker_calls, monkey
 
 @pytest.fixture
 def run_models(monkeypatch):
-    monkeypatch.setattr(cli, "load_catalog", lambda refresh=False: CATALOG)
+    monkeypatch.setattr(cli, "load_catalog", lambda *a, **k: CATALOG)
     runner = CliRunner()
     return lambda *args: runner.invoke(cli.app, ["models", *args])
 
