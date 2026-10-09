@@ -15,7 +15,7 @@ regress serve /path/to/project        # http://127.0.0.1:8765/api
 
 ## Access and safety
 
-The server binds to `127.0.0.1` by default and has no authentication of its own. A non-loopback `--host` requires `--allow-remote`. To host it, use the [Docker deployment](/docs/deployment/application), which puts it behind Nginx with Basic Authentication.
+The server binds to `127.0.0.1` by default and has no authentication of its own. A non-loopback `--host` requires `--allow-remote`. To host it, use the [Docker deployment](/docs/deployment/application), which puts it behind Nginx without a login requirement.
 
 - **Allowed origins.** Browsers may call the API only from `http://localhost:5173` and `http://127.0.0.1:5173` unless you pass `--origin URL` (repeatable). Requests that change something from any other origin are refused with `403`. Clients without an `Origin` header, such as `curl`, are allowed.
 - **Host check.** The `Host` header must match the server, which blocks DNS-rebinding attacks.
@@ -28,7 +28,7 @@ The server binds to `127.0.0.1` by default and has no authentication of its own.
 
 | Method | Path | Returns |
 | --- | --- | --- |
-| `GET` | `/health` | Liveness: `status` (`ok`), the API `version`, and `project_root`. The deployment's unauthenticated `/healthz` proxies to `/ready` instead, which does not include the project path. |
+| `GET` | `/health` | Liveness: `status` (`ok`), the API `version`, and `project_root`. The deployment's `/healthz` proxies to `/ready` instead, which does not include the project path. |
 | `GET` | `/ready` | `200` when the project, installed tools, API key presence, and artifact storage are ready; `503` with the failing checks otherwise. |
 | `GET` | `/project` | Project root and name, config file, installed package versions, toolchain, problems preventing a run, whether the API key is set, and the active run. |
 | `POST` | `/project/init` | Installs missing dependencies and writes `regress.toml`, like `regress init --yes`. Can take minutes. |

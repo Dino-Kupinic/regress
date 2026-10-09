@@ -36,21 +36,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: docker build --tag regress-ci .
-      - name: Check readiness and authentication
+      - name: Check readiness and access without login
         shell: bash
         run: |
           docker run --detach --name regress-ci --publish 8080:8080 \
             --env REGRESS_PUBLIC_ORIGIN=https://regress.example \
-            --env OPENAI_API_KEY=ci-placeholder \
-            --env REGRESS_BASIC_AUTH_USER=ci \
-            --env REGRESS_BASIC_AUTH_PASSWORD=ci-test-password regress-ci
+            --env OPENAI_API_KEY=ci-placeholder regress-ci
           for attempt in {1..30}; do
             if curl --fail --silent http://127.0.0.1:8080/healthz; then break; fi
             sleep 2
           done
           curl --fail --silent http://127.0.0.1:8080/healthz
-          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:8080/api/health)" = 401
-          curl --fail --silent --user ci:ci-test-password http://127.0.0.1:8080/api/health
+          curl --fail --silent http://127.0.0.1:8080/
+          curl --fail --silent http://127.0.0.1:8080/api/health
       - name: Check unprivileged mutation toolchain
         run: |
           docker exec --workdir /data/project regress-ci gosu regress /app/.venv/bin/python -c '

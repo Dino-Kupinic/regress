@@ -1,9 +1,9 @@
 ---
 title: Deploy the application
-description: Host the web app and Python API with Docker, Coolify, authentication, persistent storage, and recovery.
+description: Host the web app and Python API with Docker, Coolify, persistent storage, and recovery.
 ---
 
-The root `Dockerfile` builds the React Router web app and Python API into one container. Nginx serves the frontend on port `8080`, protects it with HTTP Basic Authentication, and proxies `/api/` to a Python process on `127.0.0.1:8765`. Your hosting platform supplies HTTPS.
+The root `Dockerfile` builds the React Router web app and Python API into one container. Nginx serves the frontend on port `8080`, and proxies `/api/` to a Python process on `127.0.0.1:8765`. Your hosting platform supplies HTTPS.
 
 This is the deployment for the Regress application that runs tests. The documentation website is a separate application under `docs/`; see [Deploy the documentation](/docs/deployment/documentation).
 
@@ -14,16 +14,14 @@ This is the deployment for the Regress application that runs tests. The document
 3. Add the runtime variables below using the platform's environment or secret settings.
 4. Mount a dedicated persistent volume at `/data`.
 5. Configure a stop timeout of at least **30 seconds**, one application instance, and health checks at `/healthz`.
-6. Deploy and open your HTTPS domain. Sign in using your configured Basic Authentication credentials.
+6. Deploy and open your HTTPS domain.
 
 | Variable | Value |
 | --- | --- |
 | `REGRESS_PUBLIC_ORIGIN` | The exact browser origin, such as `https://regress.example.com`. It must use HTTPS and have no path or trailing slash. |
 | `OPENAI_API_KEY` | A server-side OpenAI API key used for model requests. |
-| `REGRESS_BASIC_AUTH_USER` | A login name without colons or newlines. |
-| `REGRESS_BASIC_AUTH_PASSWORD` | A strong password for this instance. |
 
-The entrypoint requires the public origin and both authentication variables before starting. A missing API key leaves the application unready for model runs. The API key is never needed in a frontend build variable.
+The entrypoint requires the public origin before starting. A missing API key leaves the application unready for model runs. The API key is never needed in a frontend build variable.
 
 ## Deploy with Docker and an HTTPS proxy
 
@@ -33,7 +31,7 @@ Build from the repository root:
 docker build --tag regress:local .
 ```
 
-Save the four runtime variables in a private environment file outside the repository, then run:
+Save the two runtime variables in a private environment file outside the repository, then run:
 
 ```bash
 docker run --detach \
@@ -64,26 +62,26 @@ The entrypoint assigns `/data` to the dedicated `regress` user. Use a dedicated 
 
 To use another repository, stop the application, populate `/data/project` with that JavaScript or TypeScript package, and install its Vitest/Stryker dependencies there. Ensure the files are appropriate for the Linux container and the `regress` user can write to them. Preserve the previous project's volume or backup if its history is needed. Then start the application and check Project setup. The deployment serves one project per instance.
 
-## Verify authentication and readiness
+## Verify access and readiness
 
 ```bash
 curl --fail http://127.0.0.1:8080/healthz
 curl --include http://127.0.0.1:8080/api/health
-curl --user your-login https://regress.example.com/api/health
+curl --fail https://regress.example.com/api/health
 ```
 
-The second request should return `401`; the third prompts for your password. Substitute your login and domain.
+The API health requests should return `200` without login credentials. Substitute your domain.
 
 | Endpoint | Authentication | Meaning |
 | --- | --- | --- |
 | `/healthz` | None | Readiness: project settings, installed tools, API key presence, and writable artifact storage. Returns `200` or `503`. |
-| `/api/health` | Required through Nginx | Liveness, API version, and `project_root`. |
-| `/api/ready` | Required through Nginx | The backend readiness result. |
-| `/api/project` | Required through Nginx | Project details and problems preventing a run. |
+| `/api/health` | None | Liveness, API version, and `project_root`. |
+| `/api/ready` | None | The backend readiness result. |
+| `/api/project` | None | Project details and problems preventing a run. |
 
 The Docker image already includes a `/healthz` check with a 30-second interval, 5-second timeout, 60-second startup period, and three retries. Readiness does not call OpenAI or validate billing or model access. A busy worker remains ready, while a conflicting job submission returns `409`.
 
-`/healthz` exposes no project paths. All frontend and `/api/` routes require Basic Authentication in this deployment, including the interactive API documentation.
+`/healthz` exposes no project paths. All frontend and `/api/` routes are accessible without a login prompt, including the interactive API documentation.
 
 ## Run one instance per project
 
@@ -107,4 +105,4 @@ Set CPU and memory limits according to the project's Stryker workload. Keep the 
 
 For startup and runtime failures, inspect container logs and `/data/project/.regress/runs/<id>/report.json` and `events.jsonl`. Unexpected HTTP errors include `X-Request-ID` for finding the corresponding backend log entry. Tool logs retain the latest 1 MiB of output.
 
-A `503` response with `project: false` means to inspect the authenticated `/api/project` response for missing packages, invalid settings, or a missing key. `storage: false` means to check the volume's permissions and available space. Model failures after successful readiness can still indicate an invalid key, unavailable model, insufficient quota, or a network problem.
+A `503` response with `project: false` means to inspect the `/api/project` response for missing packages, invalid settings, or a missing key. `storage: false` means to check the volume's permissions and available space. Model failures after successful readiness can still indicate an invalid key, unavailable model, insufficient quota, or a network problem.

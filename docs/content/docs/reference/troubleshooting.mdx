@@ -126,13 +126,13 @@ Don't run `regress run` or `regress eval` against a project that `regress serve`
 
 ### The container exits at startup
 
-The entrypoint requires `REGRESS_PUBLIC_ORIGIN`, `REGRESS_BASIC_AUTH_USER`, and `REGRESS_BASIC_AUTH_PASSWORD`. The origin must be `https://` with no path or trailing slash, and the user name must not contain colons. The log names the missing or invalid variable.
+The entrypoint requires `REGRESS_PUBLIC_ORIGIN`. The origin must be `https://` with no path or trailing slash. The log names the missing or invalid variable.
 
 ### `/healthz` returns 503
 
 The response lists which check failed:
 
-- `project: false`: sign in and open `/api/project` or the Project setup page for the missing package, invalid setting, or missing key.
+- `project: false`: open `/api/project` or the Project setup page for the missing package, invalid setting, or missing key.
 - `storage: false`: the volume at `/data` is not writable, or it is full.
 
 Readiness does not call the model provider. A ready instance can still fail runs because of the key, quota, model access, or the network.

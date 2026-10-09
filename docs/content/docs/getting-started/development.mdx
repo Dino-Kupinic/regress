@@ -21,7 +21,7 @@ Follow [Installation](/docs/getting-started/installation) to install Python, exa
 | `web/app/` | React Router application, pages, components, and API client. |
 | `examples/` | Vitest/Stryker project, weak initial tests, hidden bugs, and oracle suites. |
 | `tests/` | Python unit and integration tests. |
-| `deploy/`, `Dockerfile` | Authenticated Nginx proxy, process entrypoint, and production image. |
+| `deploy/`, `Dockerfile` | Nginx proxy, process entrypoint, and production image. |
 | `docs/` | This Fumadocs documentation application. |
 
 The browser calls `/api`. Vite forwards those requests to Python during development; Nginx does the same in the production container. The backend owns the API key, configuration, project files, and run processes.

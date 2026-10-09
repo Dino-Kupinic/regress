@@ -123,7 +123,7 @@ regress serve /path/to/project --port 8765
 
 The path defaults to `.`. The server listens at `127.0.0.1:8765` by default; interactive API documentation is at `/api/docs`.
 
-`--host` changes the bind address. A non-loopback address requires `--allow-remote`; use the authenticated deployment proxy when hosting the application. `--origin URL` is repeatable and replaces the default allowed browser origins (`http://localhost:5173` and `http://127.0.0.1:5173`).
+`--host` changes the bind address. A non-loopback address requires `--allow-remote`; use the deployment proxy when hosting the application. `--origin URL` is repeatable and replaces the default allowed browser origins (`http://localhost:5173` and `http://127.0.0.1:5173`).
 
 The API serves one project and reserves it exclusively. A second `regress serve` for that project waits up to 30 seconds for the lock and then exits if the first server is still running. While it waits, `/api/ready` reports ready. Do not run a CLI mutation job or evaluation against that project while the API is serving it. Backend process supervision and project locking require Linux or macOS.
 
