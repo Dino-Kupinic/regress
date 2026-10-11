@@ -259,8 +259,20 @@ llm_max_duration = 1800  # total budget for one proposal, including retries
 llm_max_output_tokens = 32768  # output budget per request, including reasoning
 vitest_timeout = 300  # seconds a Vitest run may take before a candidate counts as hanging
 stryker_timeout = 1800  # seconds for one mutation run
+incremental = true    # reuse unchanged mutation results between rounds of the same run
 # fail_under = 80     # `regress check` fails below this combined mutation score
 ```
+
+Stryker's incremental mode is enabled for improvement rounds. Each run keeps its cache in
+`stryker/incremental.json` inside the run directory; separate runs start fresh. A changed
+source file (including line endings), test-file path, tool version, or mutation range also
+starts a fresh cache. After test edits, static mutants are always evaluated again because
+they have no reliable per-test coverage. Set `incremental = false` for full mutation runs.
+The terminal and API events show **Reused** and **Re-tested** counts, and each stage in
+`report.json` records `reused_mutants` and `retested_mutants`. Re-tested includes mutants
+evaluated from coverage without executing a test, such as `NoCoverage`.
+See the [incremental benchmarks](docs/benchmarks/stryker-incremental.md) for timings,
+status-parity checks, and reproduction steps.
 
 ## HTTP API
 

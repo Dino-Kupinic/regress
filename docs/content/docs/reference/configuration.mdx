@@ -32,6 +32,7 @@ The web app's **Settings** page and `regress models --set` write the personal co
 | `llm_max_output_tokens` | `32768` | 1024–131072 | Output budget for one model response, including reasoning. |
 | `vitest_timeout` | `300` | 10–14400 s | Time limit for one Vitest validation run. |
 | `stryker_timeout` | `1800` | 30–86400 s | Time limit for one Stryker mutation run. |
+| `incremental` | `true` | boolean | Reuse unchanged mutation results between rounds of the same run. Set `false` to evaluate every mutant again. |
 | `fail_under` | none | 0–100 % | `regress check` fails below this combined mutation score. See [Continuous integration](/docs/using/ci). |
 | `max_cost` | none | over 0, up to 10000 USD | Budget per run: Regress stops before a model call would go past it. Needs a known price. See [Costs and budgets](/docs/reference/costs). |
 | `prices` | bundled | a table of model ID to `input`, `output`, optional `cached_input` (USD per million tokens) | Prices for models Regress doesn't know, or newer prices. See [Costs and budgets](/docs/reference/costs#prices). |
@@ -56,6 +57,7 @@ rounds = 1            # improvement rounds driven by surviving mutants
 max_repairs = 2       # retries when a generated test file fails validation
 max_mutants = 40      # undetected mutants sent to the model per round
 runner = "auto"       # how to run Vitest and Stryker: "bun", "npx", or "auto"
+incremental = true    # reuse unchanged mutation results between rounds of the same run
 # llm_timeout = 120   # seconds without any data from the model before Regress retries (up to 3 attempts)
 # llm_max_duration = 1800  # total seconds allowed for one proposal, including retries
 # llm_max_output_tokens = 32768  # output budget, including model reasoning
@@ -63,6 +65,19 @@ runner = "auto"       # how to run Vitest and Stryker: "bun", "npx", or "auto"
 ```
 
 Commit `regress.toml` to share defaults with your team. Pin `model` here only when everyone should use the same model; it overrides each person's personal default.
+
+The incremental cache lives in `stryker/incremental.json` inside each run directory.
+Separate runs start fresh. Changes to the source bytes, test-file path, tool versions, or
+mutation range invalidate the cache. Static mutants are evaluated again after test edits,
+so new tests can still kill survivors that have no per-test coverage. Interrupted or failed
+mutation runs cannot seed the next round. Full per-round mutation reports remain available.
+
+Terminal output and API mutation events report reused and re-tested counts. Stage mutation
+results in `report.json` also store `reused_mutants` and `retested_mutants`; older reports
+have no counts. Re-tested includes results decided from coverage without executing tests.
+Stryker tracks the mutated source and test files; if you change imported helpers, snapshots,
+or test configuration during a run, disable incremental mode. See
+[Stryker's incremental limitations](https://stryker-mutator.io/docs/stryker-js/incremental/#limitations).
 
 ## Personal config
 

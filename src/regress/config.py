@@ -31,6 +31,7 @@ rounds = 1            # improvement rounds driven by surviving mutants
 max_repairs = 2       # retries when a generated test file fails validation
 max_mutants = 40      # undetected mutants sent to the model per round
 runner = "auto"       # how to run Vitest and Stryker: "bun", "npx", or "auto"
+incremental = true    # reuse unchanged mutation results between rounds of the same run
 # llm_timeout = 120   # seconds without any data from the model before Regress retries (up to 3 attempts)
 # llm_max_duration = 1800  # total seconds allowed for one proposal, including retries
 # llm_max_output_tokens = 32768  # output budget, including model reasoning
@@ -69,6 +70,7 @@ class Settings(BaseModel):
     llm_max_output_tokens: int = Field(default=32768, ge=1024, le=131072)
     vitest_timeout: int = Field(default=300, ge=10, le=14400)
     stryker_timeout: int = Field(default=1800, ge=30, le=86400)
+    incremental: bool = True
     fail_under: float | None = Field(default=None, ge=0, le=100)  # `regress check` gate, in percent
     max_cost: float | None = Field(default=None, gt=0, le=10_000)  # USD per run: no model call goes past it
     # USD per million tokens, by model ID, over the bundled list: {"gpt-6-luna" = {input = 0.1, output = 0.5}}
