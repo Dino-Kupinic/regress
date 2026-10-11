@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.6.1 (2026-10-11)
+
+### Performance Improvements
+
+- Reuse Stryker results between improvement rounds
+  ([`3b9c589`](https://github.com/Dino-Kupinic/regress/commit/3b9c58919da8c7738ccd35b2a94c253e4965d229))
+
+
 ## v0.6.0 (2026-10-04)
 
 ### Documentation
