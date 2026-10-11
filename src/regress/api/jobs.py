@@ -248,6 +248,8 @@ class PipeReporter(Reporter):
             killed=run.killed + run.timeout,
             survived=run.survived,
             no_coverage=run.no_coverage,
+            reused_mutants=run.reused_mutants,
+            retested_mutants=run.retested_mutants,
             duration_seconds=run.duration_seconds,
         )
 

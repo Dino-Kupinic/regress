@@ -2,17 +2,19 @@ from __future__ import annotations
 
 import json
 import os
+import re
+from hashlib import sha256
 from pathlib import Path
 
 from regress.errors import ToolError
 from regress.files import atomic_write_text
 from regress.models import Mutant, MutantStatus, MutationRun
-from regress.process import run_command, tail
+from regress.process import run_command, strip_ansi, tail
 from regress.project import Project
 
 
-def stryker_config(project: Project, report_path: Path, temp_dir: Path) -> dict:
-    return {
+def stryker_config(project: Project, report_path: Path, temp_dir: Path, incremental_file: Path | None = None) -> dict:
+    config = {
         "testRunner": "vitest",
         "mutate": project.mutate_patterns,
         # Only the target test file counts, so scores reflect what that file alone can detect.
@@ -23,22 +25,48 @@ def stryker_config(project: Project, report_path: Path, temp_dir: Path) -> dict:
         "tempDirName": _rel(temp_dir, project.root),
         "cleanTempDir": "always",
         "ignorePatterns": [".regress"],
-        "incremental": False,
+        "incremental": incremental_file is not None,
         "thresholds": {"high": 80, "low": 60, "break": None},
         "logLevel": "info",
         "fileLogLevel": "off",
     }
+    if incremental_file is not None:
+        config["incrementalFile"] = _rel(incremental_file, project.root)
+        config["plugins"] = [_rel(incremental_file.with_name("regress-vitest.mjs"), project.root)]
+    return config
 
 
-def run_stryker(project: Project, output_dir: Path, index: int, timeout: float = 1800) -> MutationRun:
+def run_stryker(
+    project: Project, output_dir: Path, index: int, timeout: float = 1800, incremental: bool = True
+) -> MutationRun:
     output_dir.mkdir(parents=True, exist_ok=True)
     report_path = output_dir / f"mutation-{index}.json"
     config_path = output_dir / f"stryker-{index}.config.json"
     report_path.unlink(missing_ok=True)
     temp_dir = output_dir / "tmp"  # per run, so concurrent runs never share a sandbox
-    atomic_write_text(config_path, json.dumps(stryker_config(project, report_path, temp_dir), indent=2))
+    incremental_file = output_dir / "incremental.json"
+    metadata_file = output_dir / "incremental-context.json"
+    context = {
+        "source": project.source_rel,
+        "source_sha256": sha256(project.source.read_bytes()).hexdigest(),
+        "test": project.test_rel,
+        "mutate": project.mutate_patterns,
+        "toolchain": project.toolchain.describe(),
+        "vitest_runner": project.toolchain.vitest_runner,
+    }
+    test_hash = sha256(project.test_file.read_bytes()).hexdigest()
+    has_cache = (
+        _prepare_incremental(incremental_file, metadata_file, context, test_hash, index) if incremental else False
+    )
+    config = stryker_config(project, report_path, temp_dir, incremental_file if incremental else None)
+    if incremental:
+        atomic_write_text(output_dir / "regress-vitest.mjs", Path(__file__).with_name("stryker_vitest.mjs").read_text())
+    atomic_write_text(config_path, json.dumps(config, indent=2))
 
     args = project.toolchain.command("stryker", "run", _rel(config_path, project.root))
+    # Only a successfully parsed, complete run may seed the next round. Stryker also writes
+    # partial caches on interruption, which we deliberately discard.
+    metadata_file.unlink(missing_ok=True)
     result = run_command(args, cwd=project.root, timeout=timeout, log_path=output_dir / f"stryker-{index}.log")
     if result.returncode != 0 or not report_path.is_file():
         raise ToolError(f"Stryker failed (exit code {result.returncode}).", _stryker_error(result.output))
@@ -48,7 +76,35 @@ def run_stryker(project: Project, output_dir: Path, index: int, timeout: float =
         raise ToolError(f"Stryker produced an unreadable report: {error}", tail(result.output)) from error
     run = parse_stryker_report(payload, project.source_rel, index)
     run.duration_seconds = round(result.duration_seconds, 1)
+    if incremental:
+        match = re.search(r"(\d+) of (\d+) mutant result\(s\) are reused", strip_ansi(result.output))
+        if match and int(match[2]) == len(run.mutants) and int(match[1]) <= len(run.mutants):
+            run.reused_mutants = int(match[1])
+        elif not has_cache:
+            run.reused_mutants = 0
+        atomic_write_text(metadata_file, json.dumps({"context": context, "test_sha256": test_hash}))
     return run
+
+
+def _prepare_incremental(path: Path, metadata: Path, context: dict, test_hash: str, index: int) -> bool:
+    """Reuse only this run's cache, with byte-identical source and the same mutation scope."""
+    try:
+        previous = json.loads(metadata.read_text())
+        if index == 1 or previous["context"] != context:
+            raise ValueError("new run or changed source/scope")
+        report = json.loads(path.read_text())
+        parse_stryker_report(report, context["source"], index - 1)
+        if previous["test_sha256"] != test_hash:
+            # Static mutants have no per-test coverage. Stryker can't reliably discover
+            # that a new test now kills one, so always evaluate them again after edits.
+            for entry in report["files"].values():
+                entry["mutants"] = [m for m in entry["mutants"] if m.get("static") is False]
+            atomic_write_text(path, json.dumps(report))
+        return True
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, ToolError):
+        path.unlink(missing_ok=True)
+        metadata.unlink(missing_ok=True)
+        return False
 
 
 def parse_stryker_report(report: dict, source_rel: str, index: int) -> MutationRun:

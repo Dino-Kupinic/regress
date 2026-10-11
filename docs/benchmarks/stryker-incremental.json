@@ -1,0 +1,256 @@
+{
+  "date": "2026-10-11",
+  "environment": {
+    "platform": "macOS arm64",
+    "node": "26.8.2",
+    "bun": "1.3.13",
+    "python": "3.13.12",
+    "stryker": "10.0.0",
+    "vitest_runner": "10.0.0",
+    "vitest": "4.1.11"
+  },
+  "trials": 3,
+  "results": [
+    {
+      "source": "src/backoff.ts",
+      "incremental_seconds": 7.628,
+      "full_seconds": 7.404,
+      "speedup": 0.971,
+      "samples": [
+        {
+          "incremental_seconds": 7.381701290956698,
+          "full_seconds": 7.50807237502886,
+          "reused": 0,
+          "total": 45,
+          "score": 93.33333333333333
+        },
+        {
+          "incremental_seconds": 7.6314017090480775,
+          "full_seconds": 7.353211292007472,
+          "reused": 0,
+          "total": 45,
+          "score": 93.33333333333333
+        },
+        {
+          "incremental_seconds": 7.627729707979597,
+          "full_seconds": 7.404273165971972,
+          "reused": 0,
+          "total": 45,
+          "score": 93.33333333333333
+        }
+      ],
+      "project": "examples"
+    },
+    {
+      "source": "src/cart.ts",
+      "incremental_seconds": 2.717,
+      "full_seconds": 3.468,
+      "speedup": 1.276,
+      "samples": [
+        {
+          "incremental_seconds": 2.834849708015099,
+          "full_seconds": 3.4678327500005253,
+          "reused": 30,
+          "total": 88,
+          "score": 96.5909090909091
+        },
+        {
+          "incremental_seconds": 2.7174485829891637,
+          "full_seconds": 3.695795332954731,
+          "reused": 30,
+          "total": 88,
+          "score": 96.5909090909091
+        },
+        {
+          "incremental_seconds": 2.6893343330011703,
+          "full_seconds": 3.3028898339834996,
+          "reused": 30,
+          "total": 88,
+          "score": 96.5909090909091
+        }
+      ],
+      "project": "examples"
+    },
+    {
+      "source": "src/intervals.ts",
+      "incremental_seconds": 2.367,
+      "full_seconds": 2.633,
+      "speedup": 1.112,
+      "samples": [
+        {
+          "incremental_seconds": 2.3610240829875693,
+          "full_seconds": 2.6331145419972017,
+          "reused": 19,
+          "total": 61,
+          "score": 91.80327868852459
+        },
+        {
+          "incremental_seconds": 2.367968416016083,
+          "full_seconds": 2.6374164579901844,
+          "reused": 19,
+          "total": 61,
+          "score": 91.80327868852459
+        },
+        {
+          "incremental_seconds": 2.367272250005044,
+          "full_seconds": 2.630588457977865,
+          "reused": 19,
+          "total": 61,
+          "score": 91.80327868852459
+        }
+      ],
+      "project": "examples"
+    },
+    {
+      "source": "src/pagination.ts",
+      "incremental_seconds": 1.345,
+      "full_seconds": 2.566,
+      "speedup": 1.907,
+      "samples": [
+        {
+          "incremental_seconds": 1.353800582990516,
+          "full_seconds": 2.566092375025619,
+          "reused": 55,
+          "total": 56,
+          "score": 100.0
+        },
+        {
+          "incremental_seconds": 1.3373286669957452,
+          "full_seconds": 2.5845204170327634,
+          "reused": 55,
+          "total": 56,
+          "score": 100.0
+        },
+        {
+          "incremental_seconds": 1.345476749993395,
+          "full_seconds": 2.5506499580224045,
+          "reused": 55,
+          "total": 56,
+          "score": 100.0
+        }
+      ],
+      "project": "examples"
+    },
+    {
+      "source": "src/password.ts",
+      "incremental_seconds": 2.959,
+      "full_seconds": 3.123,
+      "speedup": 1.056,
+      "samples": [
+        {
+          "incremental_seconds": 2.937551666982472,
+          "full_seconds": 3.1233009999850765,
+          "reused": 16,
+          "total": 89,
+          "score": 85.3932584269663
+        },
+        {
+          "incremental_seconds": 3.082203041005414,
+          "full_seconds": 3.186943207983859,
+          "reused": 16,
+          "total": 89,
+          "score": 85.3932584269663
+        },
+        {
+          "incremental_seconds": 2.958613916998729,
+          "full_seconds": 3.1185745000257157,
+          "reused": 16,
+          "total": 89,
+          "score": 85.3932584269663
+        }
+      ],
+      "project": "examples"
+    },
+    {
+      "source": "src/rate-limiter.ts",
+      "incremental_seconds": 2.558,
+      "full_seconds": 2.638,
+      "speedup": 1.031,
+      "samples": [
+        {
+          "incremental_seconds": 2.5861979160108604,
+          "full_seconds": 2.6384499999694526,
+          "reused": 6,
+          "total": 60,
+          "score": 91.66666666666667
+        },
+        {
+          "incremental_seconds": 2.5472192500019446,
+          "full_seconds": 2.6165031249984168,
+          "reused": 6,
+          "total": 60,
+          "score": 91.66666666666667
+        },
+        {
+          "incremental_seconds": 2.5579264169791713,
+          "full_seconds": 2.694566332967952,
+          "reused": 6,
+          "total": 60,
+          "score": 91.66666666666667
+        }
+      ],
+      "project": "examples"
+    },
+    {
+      "source": "src/slugify.ts",
+      "incremental_seconds": 2.546,
+      "full_seconds": 2.502,
+      "speedup": 0.983,
+      "samples": [
+        {
+          "incremental_seconds": 2.55838187498739,
+          "full_seconds": 2.4742603749618866,
+          "reused": 0,
+          "total": 50,
+          "score": 96.0
+        },
+        {
+          "incremental_seconds": 2.5462994999834336,
+          "full_seconds": 2.502338083984796,
+          "reused": 0,
+          "total": 50,
+          "score": 96.0
+        },
+        {
+          "incremental_seconds": 2.5199718750081956,
+          "full_seconds": 2.529736291966401,
+          "reused": 0,
+          "total": 50,
+          "score": 96.0
+        }
+      ],
+      "project": "examples"
+    },
+    {
+      "source": "src/defu.ts",
+      "incremental_seconds": 1.983,
+      "full_seconds": 2.758,
+      "speedup": 1.391,
+      "samples": [
+        {
+          "incremental_seconds": 1.9591825000243261,
+          "full_seconds": 2.749570499989204,
+          "reused": 53,
+          "total": 67,
+          "score": 79.1044776119403
+        },
+        {
+          "incremental_seconds": 2.161289250012487,
+          "full_seconds": 2.8920415829634294,
+          "reused": 53,
+          "total": 67,
+          "score": 79.1044776119403
+        },
+        {
+          "incremental_seconds": 1.9826085419626907,
+          "full_seconds": 2.758043000008911,
+          "reused": 53,
+          "total": 67,
+          "score": 79.1044776119403
+        }
+      ],
+      "project": "defu",
+      "commit": "82632b66f5914e9946edce300e10633a3d5c0cb7"
+    }
+  ]
+}

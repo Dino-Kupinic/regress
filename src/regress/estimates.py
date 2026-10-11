@@ -29,6 +29,7 @@ def run_options(settings: Settings, model: str, **overrides: bool) -> RunOptions
         max_mutants=settings.max_mutants,
         vitest_timeout=settings.vitest_timeout,
         stryker_timeout=settings.stryker_timeout,
+        incremental=settings.incremental,
         price=price,
         max_cost=settings.max_cost,
         **overrides,

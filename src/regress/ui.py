@@ -217,6 +217,9 @@ class ConsoleReporter(Reporter):
         self._row("Survived", run.survived)
         if run.no_coverage:
             self._row("No coverage", run.no_coverage)
+        if run.reused_mutants is not None:
+            self._row("Reused", run.reused_mutants)
+            self._row("Re-tested", run.retested_mutants)
         self._row("Score", format_score(run.score), f"bold {score_style(run.score)}")
         self.console.print()
 

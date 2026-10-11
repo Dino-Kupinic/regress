@@ -93,6 +93,13 @@ class MutationRun(BaseModel):
     index: int
     mutants: list[Mutant]
     duration_seconds: float = 0.0
+    # None for non-incremental runs or tools that don't report reuse statistics.
+    reused_mutants: int | None = Field(default=None, ge=0)
+
+    @computed_field
+    @property
+    def retested_mutants(self) -> int | None:
+        return len(self.mutants) - self.reused_mutants if self.reused_mutants is not None else None
 
     def _count(self, *statuses: MutantStatus) -> int:
         return sum(1 for m in self.mutants if m.status in statuses)

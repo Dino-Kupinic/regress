@@ -31,6 +31,7 @@ class RunOptions:
     generate: bool = True
     vitest_timeout: float = 300
     stryker_timeout: float = 1800
+    incremental: bool = True
     price: Price | None = None  # what the model costs; None when unknown (then no cost is reported)
     max_cost: float | None = None  # USD; needs a price
 
@@ -302,7 +303,11 @@ class Pipeline:
             lines = f" ({'line' if single else 'lines'} {format_ranges(ranges)})" if ranges else ""
             with self.reporter.activity(f"Running mutation testing on {self.project.source_rel}{lines}"):
                 run = run_stryker(
-                    self.project, self.run_dir / "stryker", self._mutation_runs, self.options.stryker_timeout
+                    self.project,
+                    self.run_dir / "stryker",
+                    self._mutation_runs,
+                    self.options.stryker_timeout,
+                    self.options.incremental,
                 )
         finally:
             source_intact = self.workspace.source_intact()
