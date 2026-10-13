@@ -159,3 +159,16 @@ Errors have a JSON body with `detail` and, for tool failures, `output`:
 | `422` | The request body does not match the schema. |
 | `500` | Vitest, Stryker, or the package manager failed (`output` has its log), or an unexpected error occurred (check the log for the `X-Request-ID`). |
 | `503` | The model request failed, the server is taking ownership of the project or shutting down, or `/ready` reports the project is not ready. |
+
+
+### Total model budgets
+
+`POST /api/batches` accepts optional `max_total_cost` (USD, above zero, at most 10000) alongside the existing per-file `max_cost`. `POST /api/evaluations` accepts it with `mode: "full"`; oracle mode rejects it. Unknown model prices return `400` before work starts. `POST /api/estimate` can also accept and return `max_total_cost`; estimates describe the planned work before budget stopping, not guaranteed spend.
+
+```json
+{"sources": ["src/cart.ts", "src/slugify.ts"], "max_cost": 0.5, "max_total_cost": 1}
+```
+
+Batch/evaluation results include `max_total_cost`, `cost_usd` for all recorded model usage (including failed attempts), and `stop_reason`. The operation finishes with partial results when its total budget stops further model calls; it does not report a cancellation. Remaining files have `status: "skipped"` and the reason in `error`; remaining evaluation modules have `skipped: true` and the reason in `note`. A run prevented from generating keeps its existing tests and reports `total_budget_stop: true` and `stop_reason`. New response fields default safely when reading old artifacts.
+
+Budget checks compare estimated cost before each call; the actual cost of an in-flight call can exceed the allowance. See [Costs and budgets](/docs/reference/costs#total-budgets-for-batches-and-evaluations).

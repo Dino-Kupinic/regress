@@ -146,3 +146,5 @@ A run over several files (`regress run src/`, `regress run --changed main`) save
 ## Delete old runs
 
 Artifacts are kept until you remove them. Delete a finished run's directory, or call `DELETE /api/runs/{id}` on a running API. Deleting a run does not touch the test file in your project.
+
+Batch reports and full evaluation artifacts also contain `max_total_cost`, aggregate `cost_usd` including failed work, and a `stop_reason` when the total allowance stops further model work. Unstarted files/modules are explicitly marked skipped. Run reports include `max_total_cost` and `total_budget_stop` to distinguish an operation-wide stop from the existing per-run budget. See [Total budgets](/docs/reference/costs#total-budgets-for-batches-and-evaluations).

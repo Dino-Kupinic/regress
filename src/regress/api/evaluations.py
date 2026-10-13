@@ -18,6 +18,9 @@ from fastapi import HTTPException
 from pydantic import BaseModel, Field
 
 from regress.api.jobs import RunManager, _interrupt, _watch_server
+from regress.config import load_settings
+from regress.errors import ProjectError
+from regress.estimates import run_options
 from regress.evaluation import BugSuite, EvalResult, load_suites
 from regress.process import retain_worker_resources
 from regress.store import regress_dir
@@ -41,6 +44,12 @@ def evaluation_worker(server_pid: int, lock_descriptor: int | None = None) -> No
 class EvalRequest(BaseModel):
     mode: Literal["oracle", "full"]
     max_cost: float | None = Field(default=None, gt=0, le=10_000, description="Budget in USD per module run.")
+    max_total_cost: float | None = Field(
+        default=None,
+        gt=0,
+        le=10_000,
+        description="Total model budget for the full evaluation, checked using estimates.",
+    )
 
 
 class EvalJob(BaseModel):
@@ -134,7 +143,9 @@ class EvaluationManager:
                     return
                 self._reap()
 
-    def start(self, mode: Literal["oracle", "full"], max_cost: float | None = None) -> EvalJob:
+    def start(
+        self, mode: Literal["oracle", "full"], max_cost: float | None = None, max_total_cost: float | None = None
+    ) -> EvalJob:
         with self._lock:
             if self._closed:
                 raise HTTPException(503, "Regress is shutting down.")
@@ -153,9 +164,22 @@ class EvaluationManager:
             ]
             if mode == "oracle":
                 command.append("--oracle")
-            elif max_cost is not None:
-                command += ["--max-cost", repr(float(max_cost))]
+            else:
+                if max_cost is not None:
+                    command += ["--max-cost", repr(float(max_cost))]
+                if max_total_cost is not None:
+                    command += ["--max-total-cost", repr(float(max_total_cost))]
             try:
+                if mode == "oracle" and max_total_cost is not None:
+                    raise HTTPException(400, "max_total_cost applies to full evaluations, not oracle mode.")
+                if mode == "full" and (max_total_cost is not None or max_cost is not None):
+                    settings = load_settings(self.root, max_cost=max_cost)
+                    if settings.model is None:
+                        raise HTTPException(400, "No model chosen for this evaluation.")
+                    try:
+                        run_options(settings, settings.model, max_total_cost=max_total_cost)
+                    except ProjectError as error:
+                        raise HTTPException(400, str(error)) from error
                 if not self.suites():
                     raise HTTPException(400, "This project has no hidden-bugs/ suites to evaluate.")
                 descriptor = os.open(self._output_path, os.O_CREAT | os.O_WRONLY | os.O_TRUNC | os.O_NOFOLLOW, 0o600)

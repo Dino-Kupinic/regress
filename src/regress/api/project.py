@@ -199,6 +199,7 @@ def cost_estimate(
     rounds: int | None = None,
     generate: bool = True,
     max_cost: float | None = None,
+    max_total_cost: float | None = None,
     tests: dict[str, str] | None = None,
 ) -> CostEstimate:
     """What runs on these files would cost with the configured (or given) model. Needs no API key."""
@@ -206,7 +207,9 @@ def cost_estimate(
     if settings.model is None:
         raise ProjectError(f"No model chosen for provider {settings.provider}: pass model, or set one in regress.toml.")
     price = run_price(settings)
-    options = run_options(settings.model_copy(update={"max_cost": None}), settings.model, generate=generate)
+    options = run_options(
+        settings.model_copy(update={"max_cost": None}), settings.model, max_total_cost=max_total_cost, generate=generate
+    )
     files = []
     for relative in dict.fromkeys(sources):
         test = (tests or {}).get(relative)
@@ -224,6 +227,7 @@ def cost_estimate(
         price=price,
         prices_as_of=PRICES_AS_OF,
         max_cost=settings.max_cost,
+        max_total_cost=max_total_cost,
         files=[
             FileEstimate(
                 source_file=f.source_file,

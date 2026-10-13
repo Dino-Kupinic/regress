@@ -102,3 +102,5 @@ Create a JSON file in the target project's `hidden-bugs/` directory. Its filenam
 Adapt the paths and source fragments to actual files. Paths must be project-relative and cannot contain `..`. Every bug ID must be unique within the suite, and every nonempty `find` string must occur exactly once in the original source. The `oracle` path is required for oracle mode.
 
 Write reference tests that pass against the original implementation and detect the seeded regressions. Keep hidden bugs outside the model's feedback: the normal improvement loop uses Stryker mutations, while evaluation measures these separate regressions afterward.
+
+A full benchmark can also use `--max-total-cost USD` for the whole evaluation, including repairs and failed attempts. Remaining modules are marked skipped when this allowance stops model work. `eval.json` and `eval.md` record the total spend and stop reason. The existing `--max-cost` remains per module. See [Total budgets](/docs/reference/costs#total-budgets-for-batches-and-evaluations) for the estimate-based behavior.

@@ -144,10 +144,13 @@ def test_a_batch_runs_files_in_turn_and_keeps_going_after_a_failure(root):
         assert client.post("/api/runs", json={"source": "src/cart.ts"}).status_code == 202  # released
 
 
-def test_cancelling_a_batch_stops_the_current_run_and_starts_no_more(root):
+@pytest.mark.parametrize("total_budget", [None, 1.0])
+def test_cancelling_a_batch_stops_the_current_run_and_starts_no_more(root, total_budget):
     app = create_app(root, llm_factory=slow_llm)
     with TestClient(app, base_url="http://127.0.0.1") as client:
-        batch_id = client.post("/api/batches", json={"sources": ["src/cart.ts", "src/slugify.ts"]}).json()["id"]
+        batch_id = client.post(
+            "/api/batches", json={"sources": ["src/cart.ts", "src/slugify.ts"], "max_total_cost": total_budget}
+        ).json()["id"]
         deadline = time.monotonic() + 60
         while client.get(f"/api/batches/{batch_id}").json()["current_run"] is None:
             assert time.monotonic() < deadline
@@ -159,3 +162,33 @@ def test_cancelling_a_batch_stops_the_current_run_and_starts_no_more(root):
         assert [f["status"] for f in batch["files"]] == ["cancelled", "pending"]
         assert (root / "test/cart.test.ts").read_text() == BASELINE
         assert client.post(f"/api/batches/{batch_id}/cancel").status_code == 409
+
+
+def test_batch_total_budget_carries_between_worker_processes_and_releases_project(root):
+    (root / "regress.toml").write_text('[prices."gpt-6-luna"]\ninput = 0.0\noutput = 1.0\n')
+    app = create_app(root, llm_factory=ScriptedFactory(ONE_SHOT))
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        started = client.post(
+            "/api/batches",
+            json={
+                "sources": ["src/cart.ts", "src/slugify.ts", "src/pagination.ts"],
+                "rounds": 0,
+                "max_total_cost": 0.00304,
+            },
+        )
+        assert started.status_code == 202, started.text
+        batch = wait_for_batch(client, started.json()["id"])
+        cart, slugify, pagination = batch["files"]
+        assert batch["status"] == "completed" and batch["stop_reason"], [
+            (f["source_file"], f["status"], f["error"]) for f in batch["files"]
+        ]
+        assert batch["max_total_cost"] == 0.00304 and batch["cost_usd"] == pytest.approx(0.00005)
+        assert cart["score_kept"] is not None and cart["cost_usd"] == pytest.approx(0.00005)
+        stopped = client.get(f"/api/runs/{slugify['run_id']}").json()["report"]
+        assert stopped["total_budget_stop"] and stopped["usage"]["calls"] == 0
+        assert slugify["status"] == "skipped" and slugify["error"] == batch["stop_reason"]
+        assert pagination["status"] == "skipped" and pagination["run_id"] is None
+        assert (root / "test/cart.test.ts").read_text() == ONE_SHOT
+        assert (root / "test/slugify.test.ts").read_bytes() == (EXAMPLES / "test/slugify.test.ts").read_bytes()
+        assert client.get("/api/project").json()["active_batch"] is None
+        assert client.post("/api/runs", json={"source": "src/cart.ts", "rounds": 0}).status_code == 202

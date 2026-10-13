@@ -170,6 +170,7 @@ class EstimateRequest(BaseModel):
     rounds: int | None = Field(default=None, ge=0, le=5)
     generate: bool = True
     max_cost: float | None = Field(default=None, gt=0, le=10_000)
+    max_total_cost: float | None = Field(default=None, gt=0, le=10_000)
 
 
 class FileEstimate(BaseModel):
@@ -188,6 +189,7 @@ class CostEstimate(BaseModel):
     price: Price | None = Field(description="USD per million tokens; null when Regress has no price for the model.")
     prices_as_of: str = Field(description="When the bundled prices were last checked; [prices] in config overrides.")
     max_cost: float | None = Field(description="The budget per run that would apply.")
+    max_total_cost: float | None = None
     files: list[FileEstimate]
     calls: int
     max_calls: int
@@ -219,6 +221,12 @@ class BatchRequest(BaseModel):
     runner: Runner | None = Field(default=None, description="How to run Vitest and Stryker.")
     max_cost: float | None = Field(
         default=None, gt=0, le=10_000, description="Budget in USD per run; defaults to the configured max_cost."
+    )
+    max_total_cost: float | None = Field(
+        default=None,
+        gt=0,
+        le=10_000,
+        description="Total model budget for this batch, checked using estimates before each call.",
     )
 
 

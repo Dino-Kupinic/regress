@@ -202,6 +202,8 @@ class RunReport(BaseModel):
     cost_usd: float | None = None
     price: Price | None = None
     max_cost: float | None = None
+    max_total_cost: float | None = None
+    total_budget_stop: bool = False
     # Why the run stopped short of its rounds, e.g. the budget: the tests kept are the best valid ones so far.
     stop_reason: str | None = None
     duration_seconds: float = 0.0

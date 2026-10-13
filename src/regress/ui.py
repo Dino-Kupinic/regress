@@ -397,6 +397,11 @@ def render_batch(report: BatchReport, console: Console) -> None:
             "",
         )
     console.print(table)
+    if report.cost_usd is not None:
+        budget = f" of {format_usd(report.max_total_cost)} total budget" if report.max_total_cost else ""
+        console.print(f"Total spend {format_usd(report.cost_usd)}{budget}")
+    if report.stop_reason:
+        console.print(f"[yellow]Stopped early: {escape(report.stop_reason)}[/]")
     if totals.files:
         console.print(
             "[dim]First: the first tests measured (one-shot AI, or the existing tests with --no-generate). "

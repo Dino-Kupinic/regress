@@ -91,9 +91,11 @@ export default function BatchPage() {
   const command = `regress run ${batch.files.map((file) => file.source_file).join(" ")} --yes`;
   const { combined } = batch;
   const costs = batch.files.map((file) => file.cost_usd);
-  const spent = costs.some((value) => value != null)
-    ? costs.reduce<number>((sum, value) => sum + (value ?? 0), 0)
-    : null;
+  const spent =
+    batch.cost_usd ??
+    (costs.some((value) => value != null)
+      ? costs.reduce<number>((sum, value) => sum + (value ?? 0), 0)
+      : null);
   return (
     <Page>
       <PageHeader
@@ -102,7 +104,13 @@ export default function BatchPage() {
           <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
             <span>{dateTime(batch.created_at)}</span>
             <span className="font-mono">{batch.model}</span>
-            {spent != null && <span>{usd(spent)} spent</span>}
+            {spent != null && (
+              <span>
+                {usd(spent)} spent
+                {batch.max_total_cost != null &&
+                  ` of ${usd(batch.max_total_cost)} total budget`}
+              </span>
+            )}
             {!batch.active && <span>{duration(batch.duration_seconds)}</span>}
           </span>
         }
@@ -131,6 +139,16 @@ export default function BatchPage() {
           </>
         }
       />
+      {batch.stop_reason && (
+        <Alert>
+          <CircleAlert />
+          <AlertTitle>Total budget reached</AlertTitle>
+          <AlertDescription>
+            {batch.stop_reason} Completed results are kept; remaining files are
+            skipped.
+          </AlertDescription>
+        </Alert>
+      )}
       {batch.active && (
         <Card>
           <CardHeader>

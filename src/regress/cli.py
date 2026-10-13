@@ -76,6 +76,16 @@ YesOption = Annotated[
     bool,
     typer.Option("--yes", "-y", help="Don't ask anything; use the default model."),
 ]
+MaxTotalCostOption = Annotated[
+    float | None,
+    typer.Option(
+        "--max-total-cost",
+        min=0.0,
+        max=10_000,
+        metavar="USD",
+        help="Total model budget in USD across all files or modules; checked using estimates before each call.",
+    ),
+]
 MaxCostOption = Annotated[
     float | None,
     typer.Option(
@@ -183,6 +193,7 @@ def run(
     ] = True,
     runner: RunnerOption = None,
     max_cost: MaxCostOption = None,
+    max_total_cost: MaxTotalCostOption = None,
     verbose: Annotated[
         bool, typer.Option("--verbose", "-v", help="Show validation details and model summaries.")
     ] = False,
@@ -213,7 +224,9 @@ def run(
             project = dataclasses.replace(load_project(target.source, test, settings.runner), mutate_lines=tuple(lines))
         chosen = _pick_model(settings, yes)
         require_api_key(settings.provider, settings.api_key_env)
-        options = run_options(settings, chosen, measure_baseline=baseline, generate=generate)
+        options = run_options(
+            settings, chosen, max_total_cost=max_total_cost, measure_baseline=baseline, generate=generate
+        )
         projects = [project] if single and len(targets) == 1 else _loadable(targets, settings)
         _show_estimate(settings, chosen, options, projects)
         if not (single and len(targets) == 1) and not yes and _interactive():
@@ -264,6 +277,8 @@ def _show_estimate(settings: Settings, model: str, options: RunOptions, projects
         f"{'Estimated cost':<18}[bold]about {format_usd(summed.expected_usd)}[/], at most "
         f"{format_usd(summed.max_usd)}{files} [dim]({rate})[/]"
     )
+    if options.total_budget is not None:
+        console.print(f"[dim]{'Total budget':<18}{format_usd(options.total_budget.limit)} (estimate-based)[/]")
     if options.max_cost is not None:
         console.print(f"[dim]{'Budget per run':<18}{format_usd(options.max_cost)}[/]")
     console.print()
@@ -525,6 +540,7 @@ def eval_command(
     model: Annotated[str | None, typer.Option(help="Model, or provider:model. Skips the model question.")] = None,
     runner: RunnerOption = None,
     max_cost: MaxCostOption = None,
+    max_total_cost: MaxTotalCostOption = None,
     verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
     yes: YesOption = False,
 ) -> None:
@@ -537,13 +553,15 @@ def eval_command(
         def announce(suite) -> None:
             console.rule(f"[bold]{suite.name}[/]", align="left")
 
+        if oracle and max_total_cost is not None:
+            raise ProjectError("--max-total-cost applies to full evaluations, not --oracle.")
         if oracle:
             with console.status("[dim]Checking hidden bugs against the oracle tests...[/]"):
                 result = evaluate_oracles(examples, suites, settings.runner, on_module=None)
         else:
             chosen = _pick_model(settings, yes)
             require_api_key(settings.provider, settings.api_key_env)
-            options = run_options(settings, chosen, measure_baseline=True, generate=True)
+            options = run_options(settings, chosen, max_total_cost=max_total_cost, measure_baseline=True, generate=True)
             projects = [load_project(examples / s.source, examples / s.test, settings.runner) for s in suites]
             _show_estimate(settings, chosen, options, projects)
             result = evaluate_regress(
@@ -604,6 +622,11 @@ def _render_eval(result: EvalResult) -> None:
             if result.mode == "oracle" and stage.label == "Oracle" and stage.missed:
                 missed = ", ".join(stage.missed)
                 console.print(f"[yellow]{escape(module.module)}: oracle misses hidden bug(s) {escape(missed)}[/]")
+    if result.cost_usd is not None:
+        budget = f" of {format_usd(result.max_total_cost)} total budget" if result.max_total_cost else ""
+        console.print(f"Total spend {format_usd(result.cost_usd)}{budget}")
+    if result.stop_reason:
+        console.print(f"[yellow]Stopped early: {escape(result.stop_reason)}[/]")
     if result.cost:
         console.print(
             f"Cost {format_usd(result.cost.usd)} · per mutant the Regress tests detect "

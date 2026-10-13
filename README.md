@@ -48,6 +48,7 @@ regress run src/cart.ts      # pick a model, generate, mutation-test, improve, c
 regress run src/             # every source file in a directory, one after another
 regress run --changed main   # only files this branch changed, mutating only the changed lines
 regress check --changed main --fail-under 80   # CI gate: score the existing tests, no model
+regress run src/ --max-total-cost 2 --yes # total model allowance across every file, including repairs
 regress report               # show the latest run (or: --list, <run-id>, --json)
 regress models               # list the latest models, set your default
 regress serve                # HTTP API for the web app on http://127.0.0.1:8765/api
