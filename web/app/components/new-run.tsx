@@ -80,6 +80,7 @@ export function NewRunProvider({
   const [baseline, setBaseline] = useState(false);
   const [generate, setGenerate] = useState(true);
   const [budget, setBudget] = useState("");
+  const [totalBudget, setTotalBudget] = useState("");
   const [error, setError] = useState("");
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -110,8 +111,18 @@ export function NewRunProvider({
   ).length;
   const hasTests = withTests > 0;
   const maxCost = budget.trim() === "" ? undefined : Number(budget);
+  const maxTotalCost =
+    !single && totalBudget.trim() !== "" ? Number(totalBudget) : undefined;
+  const totalBudgetInvalid =
+    maxTotalCost !== undefined &&
+    !(
+      Number.isFinite(maxTotalCost) &&
+      maxTotalCost > 0 &&
+      maxTotalCost <= 10_000
+    );
   const budgetInvalid =
-    maxCost !== undefined && !(Number.isFinite(maxCost) && maxCost > 0);
+    maxCost !== undefined &&
+    !(Number.isFinite(maxCost) && maxCost > 0 && maxCost <= 10_000);
   const estimate = useQuery({
     queryKey: ["estimate", selected, model, rounds, generate || !hasTests],
     queryFn: () =>
@@ -138,9 +149,15 @@ export function NewRunProvider({
         ? api.startRun({ source: selected[0], ...options }).then((result) => ({
             to: `/runs/${encodeURIComponent(result.summary.id)}`,
           }))
-        : api.startBatch({ sources: selected, ...options }).then((result) => ({
-            to: `/batches/${encodeURIComponent(result.id)}`,
-          }));
+        : api
+            .startBatch({
+              sources: selected,
+              ...options,
+              max_total_cost: maxTotalCost,
+            })
+            .then((result) => ({
+              to: `/batches/${encodeURIComponent(result.id)}`,
+            }));
     },
     onSuccess: async ({ to }) => {
       await queryClient.invalidateQueries({ queryKey: ["runs"] });
@@ -173,6 +190,7 @@ export function NewRunProvider({
     setGenerate(true);
     setRounds(1);
     setBudget("");
+    setTotalBudget("");
     setOpened(true);
   };
   const matches = matchSources(sources.data ?? [], search);
@@ -205,6 +223,9 @@ export function NewRunProvider({
     !generate && hasTests && "--no-generate",
     `--rounds ${rounds}`,
     maxCost !== undefined && !budgetInvalid && `--max-cost ${maxCost}`,
+    maxTotalCost !== undefined &&
+      !totalBudgetInvalid &&
+      `--max-total-cost ${maxTotalCost}`,
     "--yes",
   ]
     .filter(Boolean)
@@ -219,9 +240,13 @@ export function NewRunProvider({
           ? "Choose source files"
           : failed.length
             ? `${failed.length === 1 ? failed[0] : `${failed.length} files`} can't be run`
-            : budgetInvalid
-              ? "The budget must be a positive amount"
-              : null;
+            : maxTotalCost !== undefined &&
+                estimate.data &&
+                !estimate.data.price
+              ? "This model needs a configured price before using a total budget"
+              : budgetInvalid || totalBudgetInvalid
+                ? "Budgets must be above 0 and at most 10,000 USD"
+                : null;
   const optionNote =
     !single && selected.length && hasTests && withTests < selected.length
       ? `${withTests} of ${selected.length} files have tests`
@@ -425,8 +450,8 @@ export function NewRunProvider({
                       files={selected.length}
                     />
                   </Field>
-                  <Field>
-                    <FieldLabel htmlFor="run-budget">Budget (USD)</FieldLabel>
+                  <Field data-invalid={budgetInvalid || undefined}>
+                    <FieldLabel htmlFor="run-budget">Per file (USD)</FieldLabel>
                     <Input
                       id="run-budget"
                       inputMode="decimal"
@@ -441,6 +466,26 @@ export function NewRunProvider({
                     />
                   </Field>
                 </div>
+                {selected.length > 1 && (
+                  <Field data-invalid={totalBudgetInvalid || undefined}>
+                    <FieldLabel htmlFor="run-total-budget">
+                      Total budget (USD)
+                    </FieldLabel>
+                    <Input
+                      id="run-total-budget"
+                      inputMode="decimal"
+                      placeholder="No total limit"
+                      value={totalBudget}
+                      aria-invalid={totalBudgetInvalid || undefined}
+                      onChange={(event) => setTotalBudget(event.target.value)}
+                    />
+                    <FieldDescription>
+                      Across every file, including repairs. Checks use estimates
+                      before each model call; the final call can cost more than
+                      expected.
+                    </FieldDescription>
+                  </Field>
+                )}
                 <Field orientation="horizontal" data-disabled={!hasTests}>
                   <FieldContent>
                     <FieldLabel htmlFor="run-baseline">

@@ -102,6 +102,9 @@ class BatchReport(BaseModel):
     status: RunStatus = "running"
     files: list[FileResult] = Field(default_factory=list)
     duration_seconds: float = 0.0
+    max_total_cost: float | None = None
+    cost_usd: float | None = None
+    stop_reason: str | None = None
 
     @property
     def totals(self) -> BatchTotals:
@@ -130,6 +133,8 @@ def run_batch(
     changed_since: str | None = None,
 ) -> BatchReport:
     """Run the pipeline on each target in turn. A failing file is recorded and the rest still run."""
+    if options.total_budget is not None and options.price is None:
+        raise ProjectError("max_total_cost needs a price for the model. Add it to [prices] in regress.toml.")
     started = time.monotonic()
     reporter = reporter or Reporter()
     store = store or RunStore(root)
@@ -140,9 +145,14 @@ def run_batch(
         changed_since=changed_since,
         model=llm.model,
         files=[FileResult(source_file=t.source.relative_to(root).as_posix()) for t in targets],
+        max_total_cost=options.total_budget.limit if options.total_budget else None,
+        cost_usd=0.0 if options.price else None,
     )
     try:
         for index, (target, result) in enumerate(zip(targets, report.files, strict=True), start=1):
+            if options.total_budget and options.total_budget.exhausted():
+                result.status, result.error = "skipped", options.total_budget.stop_reason
+                continue
             reporter.file_start(index, len(targets), result)
             try:
                 _run_one(target, result, llm, options, runner, reporter, store, report.id)
@@ -150,6 +160,12 @@ def run_batch(
                 result.status = "cancelled"
                 raise
             finally:
+                report.cost_usd = (
+                    options.total_budget.spent
+                    if options.total_budget
+                    else (sum(f.cost_usd or 0 for f in report.files) if options.price else None)
+                )
+                report.stop_reason = options.total_budget.stop_reason if options.total_budget else None
                 store.save_batch(report)
             reporter.file_end(result)
         report.status = "failed" if report.failed else "completed"
@@ -157,6 +173,9 @@ def run_batch(
         report.status = "cancelled"
         raise
     finally:
+        if options.total_budget:
+            options.total_budget.exhausted()
+            report.cost_usd, report.stop_reason = options.total_budget.spent, options.total_budget.stop_reason
         report.duration_seconds = round(time.monotonic() - started, 1)
         store.save_batch(report)
     reporter.batch_finish(report, store.batch_path(report.id))
@@ -197,13 +216,18 @@ def _run_one(
         run_dir = getattr(pipeline, "run_dir", None)
         if run_dir is not None:
             result.run_id = run_dir.name
+            run = getattr(pipeline, "report", None)
+            if run is not None:
+                result.cost_usd = run.cost_usd
 
 
 def summarize_run(run: RunReport, result: FileResult) -> None:
     """Fill in a completed file's result from its run report."""
-    result.status = "completed"
+    result.status = "skipped" if run.total_budget_stop and run.usage.calls == 0 else "completed"
+    if result.status == "skipped":
+        result.error = run.stop_reason
     result.cost_usd = run.cost_usd
-    first, kept = run.reference, run.kept
+    first, kept = run.reference or run.stage("baseline"), run.kept
     if first is not None:
         result.tests_first, result.score_first = first.test_count, first.score
     if kept is not None:

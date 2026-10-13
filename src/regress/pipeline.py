@@ -6,8 +6,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from regress.budget import TotalBudget
 from regress.changes import format_ranges
-from regress.errors import BudgetReached, CandidateRejected, RegressError
+from regress.errors import BudgetReached, CandidateRejected, ProjectError, RegressError, TotalBudgetReached
 from regress.files import atomic_write_text
 from regress.llm import LLM, Completion
 from regress.models import RunReport, Stage, StageKind, TestRunResult, TestStatus
@@ -34,6 +35,7 @@ class RunOptions:
     incremental: bool = True
     price: Price | None = None  # what the model costs; None when unknown (then no cost is reported)
     max_cost: float | None = None  # USD; needs a price
+    total_budget: TotalBudget | None = None
 
 
 @dataclass
@@ -63,6 +65,8 @@ class Pipeline:
         self.batch_id = batch_id
         self.llm = llm
         self.options = options or RunOptions()
+        if self.options.total_budget is not None and self.options.price is None:
+            raise ProjectError("max_total_cost needs a price for the model. Add it to [prices] in regress.toml.")
         self.reporter = reporter or Reporter()
         self.store = store or RunStore(project.root)
         self.ctx = PromptContext.from_project(project)
@@ -89,6 +93,7 @@ class Pipeline:
             batch_id=self.batch_id,
             price=self.options.price,
             max_cost=self.options.max_cost,
+            max_total_cost=self.options.total_budget.limit if self.options.total_budget else None,
             cost_usd=0.0 if self.options.price else None,
         )
         kept: Version | None = None
@@ -128,8 +133,14 @@ class Pipeline:
         baseline = self._baseline()
         if self.options.generate:
             prompt = generate_prompt(self.ctx, baseline.content)
-            self._check_budget(prompt)
-            current = self._propose("generated", "Generated tests", prompt, baseline)
+            try:
+                self._check_budget(prompt)
+                current = self._propose("generated", "Generated tests", prompt, baseline)
+            except TotalBudgetReached as error:
+                self.report.stop_reason = str(error)
+                self.report.total_budget_stop = True
+                self.reporter.warn(f"{error} Keeping the existing tests.")
+                return baseline
             self.reporter.generated(baseline.stage, current.stage)
             self._mutate(current)
         else:
@@ -157,6 +168,7 @@ class Pipeline:
                 improved = self._propose("improved", label, prompt, current, targeted=[m.id for m in mutants])
             except BudgetReached as error:
                 self.report.stop_reason = str(error)
+                self.report.total_budget_stop = isinstance(error, TotalBudgetReached)
                 self.reporter.warn(f"{error} Keeping the best tests so far.")
                 break
             except CandidateRejected as error:
@@ -179,13 +191,15 @@ class Pipeline:
         or, for the first call, what the estimate expects for this file.
         """
         price, limit = self.options.price, self.options.max_cost
-        if price is None or limit is None:
+        if price is None or (limit is None and self.options.total_budget is None):
             return
         spent = self.report.cost_usd or 0.0
         factor = token_factor(self.llm.model)
         output = self._last_output_tokens or self._first_output_estimate(factor)
         upcoming = next_call_cost(price, INSTRUCTIONS + prompt, output, factor)
-        if spent + upcoming > limit:
+        if self.options.total_budget is not None:
+            self.options.total_budget.check(upcoming)
+        if limit is not None and spent + upcoming > limit:
             raise BudgetReached(
                 f"The next model call would take the run past its budget of {format_usd(limit)} "
                 f"({format_usd(spent)} spent, about {format_usd(upcoming)} more)."
@@ -251,6 +265,13 @@ class Pipeline:
             self.report.usage.add(completion.input_tokens, completion.output_tokens, completion.cached_input_tokens)
             self._last_output_tokens = completion.output_tokens
             if self.options.price is not None:
+                if self.options.total_budget is not None:
+                    self.options.total_budget.spent += cost(
+                        self.options.price,
+                        completion.input_tokens,
+                        completion.output_tokens,
+                        completion.cached_input_tokens,
+                    )
                 usage = self.report.usage
                 self.report.cost_usd = cost(
                     self.options.price, usage.input_tokens, usage.output_tokens, usage.cached_input_tokens

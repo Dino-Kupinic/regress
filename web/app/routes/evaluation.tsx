@@ -42,7 +42,13 @@ import {
   EmptyHeader,
   EmptyTitle,
 } from "~/components/ui/empty";
-import { Field, FieldLabel } from "~/components/ui/field";
+import {
+  Field,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+} from "~/components/ui/field";
+import { Input } from "~/components/ui/input";
 import { Progress } from "~/components/ui/progress";
 import { Spinner } from "~/components/ui/spinner";
 import { Switch } from "~/components/ui/switch";
@@ -120,6 +126,15 @@ export default function Evaluation() {
     .data?.active_run;
   const [oracleOnly, setOracleOnly] = useState(true);
   const [confirming, setConfirming] = useState(false);
+  const [moduleBudget, setModuleBudget] = useState("");
+  const [totalBudget, setTotalBudget] = useState("");
+  const maxCost = moduleBudget.trim() === "" ? undefined : Number(moduleBudget);
+  const maxTotalCost =
+    totalBudget.trim() === "" ? undefined : Number(totalBudget);
+  const invalidBudget = (value: number | undefined) =>
+    value !== undefined &&
+    !(Number.isFinite(value) && value > 0 && value <= 10_000);
+  const budgetsInvalid = invalidBudget(maxCost) || invalidBudget(maxTotalCost);
   const estimate = useQuery({
     queryKey: ["evaluation-estimate"],
     queryFn: api.evaluationEstimate,
@@ -141,7 +156,13 @@ export default function Evaluation() {
     wasRunning.current = running;
   }, [running, job.status, client]);
   const run = useMutation({
-    mutationFn: () => api.startEvaluation(oracleOnly ? "oracle" : "full"),
+    mutationFn: () =>
+      api.startEvaluation(
+        oracleOnly ? "oracle" : "full",
+        oracleOnly
+          ? undefined
+          : { max_cost: maxCost, max_total_cost: maxTotalCost },
+      ),
     onSuccess: () => {
       client.invalidateQueries({ queryKey: ["evaluation-job"] });
       client.invalidateQueries({ queryKey: ["evaluations"] });
@@ -275,6 +296,23 @@ export default function Evaluation() {
           );
         })}
       </div>
+      {latest?.stop_reason && (
+        <Alert>
+          <CircleAlert />
+          <AlertTitle>Total budget reached</AlertTitle>
+          <AlertDescription>
+            {latest.stop_reason} Remaining modules are skipped.
+          </AlertDescription>
+        </Alert>
+      )}
+      {latest?.cost_usd != null && (
+        <p className="text-caption text-muted-foreground tabular-nums">
+          Total spend {usd(latest.cost_usd)}
+          {latest.max_total_cost != null &&
+            ` of ${usd(latest.max_total_cost)} total budget`}{" "}
+          · includes failed modules
+        </p>
+      )}
       {latest?.cost && (
         <p className="-mt-6 text-caption text-muted-foreground tabular-nums">
           Cost {usd(latest.cost.usd)} · {usd(latest.cost.per_mutant_killed)} per
@@ -579,9 +617,84 @@ export default function Evaluation() {
               check makes no model calls.
             </AlertDialogDescription>
           </AlertDialogHeader>
+          <FieldGroup>
+            <Field data-invalid={invalidBudget(maxCost) || undefined}>
+              <FieldLabel htmlFor="eval-module-budget">
+                Per module (USD)
+              </FieldLabel>
+              <Input
+                id="eval-module-budget"
+                inputMode="decimal"
+                placeholder={
+                  estimate.data?.max_cost != null
+                    ? String(estimate.data.max_cost)
+                    : "No per-module limit"
+                }
+                value={moduleBudget}
+                aria-invalid={invalidBudget(maxCost) || undefined}
+                onChange={(event) => setModuleBudget(event.target.value)}
+              />
+            </Field>
+            <Field data-invalid={invalidBudget(maxTotalCost) || undefined}>
+              <FieldLabel htmlFor="eval-total-budget">
+                Total budget (USD)
+              </FieldLabel>
+              <Input
+                id="eval-total-budget"
+                inputMode="decimal"
+                placeholder="No total limit"
+                value={totalBudget}
+                aria-invalid={invalidBudget(maxTotalCost) || undefined}
+                onChange={(event) => setTotalBudget(event.target.value)}
+              />
+              <FieldDescription>
+                Across all modules and repair attempts. Checks use estimates
+                before each model call; the final call can cost more than
+                expected.
+              </FieldDescription>
+            </Field>
+            {(maxTotalCost !== undefined || maxCost !== undefined) &&
+              estimate.data &&
+              !estimate.data.price && (
+                <p role="alert" className="text-sm text-destructive">
+                  This model has no known price. Configure its price before
+                  setting a budget.
+                </p>
+              )}
+            {budgetsInvalid && (
+              <p role="alert" className="text-sm text-destructive">
+                Budgets must be above 0 and at most 10,000 USD.
+              </p>
+            )}
+            {estimate.error && (
+              <p role="alert" className="text-sm text-destructive">
+                {estimate.error.message}
+              </p>
+            )}
+            {run.error && (
+              <p role="alert" className="text-sm text-destructive">
+                {run.error.message}
+              </p>
+            )}
+          </FieldGroup>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={() => run.mutate()}>
+            <AlertDialogAction
+              disabled={
+                budgetsInvalid ||
+                run.isPending ||
+                estimate.isFetching ||
+                !!estimate.error ||
+                ((maxTotalCost !== undefined || maxCost !== undefined) &&
+                  !estimate.data?.price)
+              }
+              onClick={(event) => {
+                event.preventDefault();
+                run.mutate(undefined, {
+                  onSuccess: () => setConfirming(false),
+                });
+              }}
+            >
               Run full evaluation
             </AlertDialogAction>
           </AlertDialogFooter>

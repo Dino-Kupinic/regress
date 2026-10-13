@@ -54,3 +54,23 @@ A budget is checked call by call, so one call can still cost somewhat more than 
 `report.json` records `cost_usd`, the `price` it was computed with, `max_cost`, and `usage`, including `cached_input_tokens`, which are charged at the cached rate. `regress report`, the end of `regress run`, the run page and the runs list show the cost. Batch results show it per file. Evaluations add a cost column and, across the counted modules, the cost per mutant the Regress tests detect and per hidden bug caught. That lets you compare models on value, not just score.
 
 Costs are computed from the token counts the provider reports, at the prices above. They don't include provider-side discounts, taxes, or charges outside Regress. Check your provider's billing page for the amount you are actually charged.
+
+
+## Total budgets for batches and evaluations
+
+`--max-total-cost USD` sets an optional allowance for the **whole operation**, including every file or module and every repair attempt:
+
+```bash
+regress run src/ --max-cost 0.5 --max-total-cost 2 --yes
+regress eval examples --max-total-cost 2 --yes
+```
+
+The existing `--max-cost` / `max_cost` remains a per-file or per-module budget. Both limits can apply together. The total allowance is an invocation option, not a persistent config setting. It must be above zero and at most 10000 USD, and needs a known model price. Oracle evaluations make no model calls and reject a total budget.
+
+Before each generation, improvement, or repair call, Regress compares the estimated next cost with both the file's allowance and the operation's remaining allowance. Actual reported usage from completed responses, including rejected candidates and failed modules, carries forward. When a total allowance prevents a call, Regress keeps the best valid tests for the current file and starts no more model work. Remaining files or modules are recorded as skipped with the stop reason. Finished results remain available.
+
+These checks use estimates before a call; actual usage of an in-flight call can exceed its estimate and the total allowance. This is **not a strict provider billing cap**. Costs are computed from responses that report usage; calls interrupted or failed before returning usage cannot be priced by Regress.
+
+The web app's multi-file drawer offers **Per file (USD)** and **Total budget (USD)**. Full evaluation confirmation offers **Per module (USD)** and **Total budget (USD)**. Empty total fields mean no total limit; empty per-file/module fields inherit `max_cost`.
+
+For HTTP, send `max_total_cost` on `POST /api/batches` or on `POST /api/evaluations` with `mode: "full"`. Batch and evaluation artifacts expose `max_total_cost`, `cost_usd` (all recorded spend, including failed work), and `stop_reason`. An evaluation's existing `cost` metrics still cover only the modules counted in every comparison column; they can differ from total `cost_usd`.

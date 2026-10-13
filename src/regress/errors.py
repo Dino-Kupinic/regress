@@ -26,6 +26,10 @@ class BudgetReached(RegressError):
     """The next model call would take the run past its max_cost."""
 
 
+class TotalBudgetReached(BudgetReached):
+    """The operation's shared budget prevents further model work."""
+
+
 class CandidateRejected(RegressError):
     """The model could not produce a valid test file within the allowed attempts."""
 

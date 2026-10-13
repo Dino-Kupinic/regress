@@ -104,7 +104,7 @@ def estimate_evaluation(evaluations: Evaluations, manager: Manager) -> CostEstim
 def start_evaluation(request: EvalRequest, evaluations: Evaluations, manager: Manager) -> EvalJob:
     if manager.active():
         raise HTTPException(409, "A run is in progress. Wait for it before starting an evaluation.")
-    return evaluations.start(request.mode, max_cost=request.max_cost)
+    return evaluations.start(request.mode, max_cost=request.max_cost, max_total_cost=request.max_total_cost)
 
 
 def _run(run_id: str, manager: Manager) -> RunHandle:
@@ -291,6 +291,7 @@ def estimate_runs(request: EstimateRequest, manager: Manager) -> CostEstimate:
             rounds=request.rounds,
             generate=request.generate,
             max_cost=request.max_cost,
+            max_total_cost=request.max_total_cost,
         )
     except ProjectError as error:
         raise HTTPException(400, str(error)) from error

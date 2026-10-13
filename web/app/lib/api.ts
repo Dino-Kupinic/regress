@@ -107,6 +107,7 @@ export type CostEstimate = {
   price: Price | null;
   prices_as_of: string;
   max_cost: number | null;
+  max_total_cost?: number | null;
   files: {
     source_file: string;
     input_tokens: number;
@@ -228,6 +229,7 @@ export type RunRequest = {
 };
 export type BatchRequest = Omit<RunRequest, "source" | "test"> & {
   sources: string[];
+  max_total_cost?: number;
 };
 export type BatchFile = {
   source_file: string;
@@ -253,6 +255,9 @@ export type BatchDetail = {
   status: RunSummary["status"];
   files: BatchFile[];
   duration_seconds: number;
+  max_total_cost?: number | null;
+  cost_usd?: number | null;
+  stop_reason?: string | null;
   combined: {
     files: number;
     score_first: number | null;
@@ -310,6 +315,7 @@ export type EvalResult = {
     error: string | null;
     note: string | null;
     run_id: string | null;
+    skipped?: boolean;
     cost_usd?: number | null;
     killed?: number | null;
   }[];
@@ -320,6 +326,9 @@ export type EvalResult = {
     per_mutant_killed: number | null;
     per_bug_caught: number | null;
   } | null;
+  max_total_cost?: number | null;
+  cost_usd?: number | null;
+  stop_reason?: string | null;
   // Totals count only these modules, the ones with a result in every column.
   counted_modules: string[];
   totals: EvalTotal[];
@@ -455,16 +464,20 @@ export const api = {
     rounds?: number;
     generate?: boolean;
     max_cost?: number;
+    max_total_cost?: number;
   }) =>
     request<CostEstimate>("/estimate", {
       method: "POST",
       body: JSON.stringify(payload),
     }),
   evaluationEstimate: () => request<CostEstimate>("/evaluations/estimate"),
-  startEvaluation: (mode: "oracle" | "full") =>
+  startEvaluation: (
+    mode: "oracle" | "full",
+    budgets?: { max_cost?: number; max_total_cost?: number },
+  ) =>
     request<EvalJob>("/evaluations", {
       method: "POST",
-      body: JSON.stringify({ mode }),
+      body: JSON.stringify({ mode, ...budgets }),
     }),
 };
 

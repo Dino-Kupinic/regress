@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from regress.budget import TotalBudget
 from regress.errors import ProjectError
 from regress.pipeline import RunOptions
 from regress.pricing import Estimate, Price, estimate, run_price, token_factor
@@ -15,12 +16,15 @@ if TYPE_CHECKING:
     from regress.config import Settings
 
 
-def run_options(settings: Settings, model: str, **overrides: bool) -> RunOptions:
+def run_options(
+    settings: Settings, model: str, *, max_total_cost: float | None = None, **overrides: bool
+) -> RunOptions:
     """The pipeline options for a run with `model`, including its price and budget."""
     price = run_price(settings, model)
-    if settings.max_cost is not None and price is None:
+    if (settings.max_cost is not None or max_total_cost is not None) and price is None:
+        budget_name = "max_total_cost" if max_total_cost is not None else "max_cost"
         raise ProjectError(
-            f"max_cost needs a price for {model}, and Regress doesn't know one. Add it to regress.toml:\n"
+            f"{budget_name} needs a price for {model}, and Regress doesn't know one. Add it to regress.toml:\n"
             f'  [prices."{model}"]\n  input = 1.0    # USD per million tokens\n  output = 4.0'
         )
     return RunOptions(
@@ -32,6 +36,7 @@ def run_options(settings: Settings, model: str, **overrides: bool) -> RunOptions
         incremental=settings.incremental,
         price=price,
         max_cost=settings.max_cost,
+        total_budget=TotalBudget(max_total_cost) if max_total_cost is not None else None,
         **overrides,
     )
 

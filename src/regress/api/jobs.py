@@ -22,7 +22,7 @@ import threading
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from multiprocessing import reduction
 from multiprocessing.connection import Connection
@@ -571,8 +571,16 @@ class Batch:
                     break
                 if project is None:
                     continue  # already marked skipped
+                budget = self._options.total_budget
+                if budget is not None and budget.exhausted():
+                    with self.lock:
+                        result.status, result.error = "skipped", budget.stop_reason
+                        self.report.stop_reason = budget.stop_reason
+                    self._save()
+                    continue
                 try:
-                    job = self._manager._launch(project, self._settings, self._options, _no_release, self.id)
+                    options = replace(self._options, total_budget=replace(budget) if budget else None)
+                    job = self._manager._launch(project, self._settings, options, _no_release, self.id)
                 except Exception as error:
                     with self.lock:
                         result.status, result.error = "failed", f"Could not start the run: {error}"
@@ -601,6 +609,15 @@ class Batch:
                             run.error,
                         )
                     result.cost_usd = run.cost_usd  # a failed or cancelled run still spent something
+                    if budget is not None:
+                        budget.spent += run.cost_usd or 0.0
+                        if run.total_budget_stop:
+                            budget.stop_reason = run.stop_reason
+                        budget.exhausted()
+                        self.report.stop_reason = budget.stop_reason
+                    self.report.cost_usd = (
+                        sum(f.cost_usd or 0 for f in self.report.files) if self._options.price else None
+                    )
                 self._save()
         except Exception:
             log.exception("Batch %s stopped unexpectedly", self.id)
@@ -876,7 +893,13 @@ class RunManager:
             )
         if self.needs_api_key:
             require_api_key(settings.provider, settings.api_key_env)
-        options = run_options(settings, settings.model, measure_baseline=request.baseline, generate=request.generate)
+        options = run_options(
+            settings,
+            settings.model,
+            max_total_cost=request.max_total_cost if isinstance(request, BatchRequest) else None,
+            measure_baseline=request.baseline,
+            generate=request.generate,
+        )
         return settings, options
 
     def _project(self, relative: str, test: str | None, settings: Settings) -> Project:
@@ -963,6 +986,8 @@ class RunManager:
                 project_root=str(self.root),
                 model=settings.model or "",
                 files=results,
+                max_total_cost=request.max_total_cost,
+                cost_usd=0.0 if options.price else None,
             )
             batch = Batch(self, report, projects, settings, options, release)
             with self._lock:

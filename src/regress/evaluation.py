@@ -81,6 +81,7 @@ class ModuleResult(BaseModel):
     module: str
     stages: list[StageResult] = Field(default_factory=list)
     error: str | None = None
+    skipped: bool = False
     note: str | None = None  # how a result was counted, e.g. when the model never wrote valid tests
     run_id: str | None = None
     cost_usd: float | None = None  # what the module's run spent on the model, when its price is known
@@ -109,6 +110,9 @@ class EvalResult(BaseModel):
     rounds: int | None = None
     modules: list[ModuleResult] = Field(default_factory=list)
     output_dir: str | None = None
+    max_total_cost: float | None = None
+    cost_usd: float | None = None
+    stop_reason: str | None = None
 
     @property
     def stage_labels(self) -> list[str]:
@@ -244,17 +248,39 @@ def evaluate_regress(
     on_module: Callable[[BugSuite], None] | None = None,
 ) -> EvalResult:
     """Existing tests vs one-shot AI tests vs Regress, per module."""
+    if options.total_budget is not None and options.price is None:
+        raise RegressError("max_total_cost needs a price for the model. Add it to [prices] in regress.toml.")
     options = replace(options, measure_baseline=True, generate=True)
     out_dir = _output_dir(examples_dir)
     llm = llm_factory()
-    result = EvalResult(created_at=datetime.now().astimezone(), mode="regress", model=llm.model, rounds=options.rounds)
+    result = EvalResult(
+        created_at=datetime.now().astimezone(),
+        mode="regress",
+        model=llm.model,
+        rounds=options.rounds,
+        max_total_cost=options.total_budget.limit if options.total_budget else None,
+        cost_usd=0.0 if options.price else None,
+    )
     try:
         for suite in suites:
+            if options.total_budget and options.total_budget.exhausted():
+                result.modules.append(
+                    ModuleResult(module=suite.name, skipped=True, note=options.total_budget.stop_reason)
+                )
+                continue
             if on_module:
                 on_module(suite)
             _evaluate_module(examples_dir, suite, llm, options, reporter, runner, result, out_dir)
     finally:
         try:
+            result.cost_usd = (
+                options.total_budget.spent
+                if options.total_budget
+                else (sum(m.cost_usd or 0 for m in result.modules) if options.price else None)
+            )
+            if options.total_budget:
+                options.total_budget.exhausted()
+            result.stop_reason = options.total_budget.stop_reason if options.total_budget else None
             _save(result, out_dir)  # also when interrupted, so finished modules are not lost
         finally:
             close = getattr(llm, "close", None)
@@ -279,8 +305,9 @@ def _evaluate_module(
         project = load_project(root / suite.source, root / suite.test, runner)
         store = RunStore(root)
         rejected: CandidateRejected | None = None
+        pipeline = Pipeline(project, llm, options, reporter, store)
         try:
-            Pipeline(project, llm, options, reporter, store).run()
+            pipeline.run()
         except CandidateRejected as error:
             rejected = error  # an outcome of the approach under test, not a failed measurement
         except RegressError as error:
@@ -288,21 +315,29 @@ def _evaluate_module(
             return
         finally:
             # Copy the run out of the throwaway sandbox even when it failed or was interrupted.
+            saved_report = getattr(pipeline, "report", None)
+            if saved_report is not None:
+                module.cost_usd = saved_report.cost_usd
+                module.run_id = saved_report.id
             _keep_artifacts(store, out_dir / suite.name)
 
         report, run_dir = store.load()
         module.run_id = report.id
         module.cost_usd = report.cost_usd
+        module.note = report.stop_reason
+        if report.total_budget_stop and report.usage.calls == 0:
+            module.skipped = True
+            return
         kept = report.kept
         module.killed = kept.mutation.killed + kept.mutation.timeout if kept and kept.mutation else 0
         try:
             existing = _hidden_bugs_for_stage(project, suite, "Existing tests", report.stage("baseline"), run_dir)
             module.stages.append(existing)
-            if rejected is not None:
+            if rejected is not None or report.total_budget_stop and report.stage("generated") is None:
                 # No valid test file, so the run kept the existing tests. Leaving the module out would
                 # total only the modules the model managed, which flatters both AI columns.
                 module.stages += [existing.model_copy(update={"label": label}, deep=True) for label in AI_LABELS]
-                module.note = f"{rejected} One-shot AI and Regress count as the existing tests, which the run kept."
+                module.note = f"{rejected or report.stop_reason} One-shot AI and Regress count as the existing tests, which the run kept."
             else:
                 for label, stage in zip(AI_LABELS, (report.stage("generated"), report.kept), strict=True):
                     module.stages.append(_hidden_bugs_for_stage(project, suite, label, stage, run_dir))
@@ -410,6 +445,11 @@ def to_markdown(result: EvalResult) -> str:
         totals.append(f"**{format_usd(spent.usd)}**" if spent else "—")
     rows.append(f"| **{result.totals_label}** | " + " | ".join(totals) + " |")
     notes = [f"- **{m.module}:** {m.note}" for m in result.modules if m.note]
+    if result.cost_usd is not None:
+        budget = f" of {format_usd(result.max_total_cost)} total budget" if result.max_total_cost else ""
+        notes.append(f"- Total spend (including failed modules): {format_usd(result.cost_usd)}{budget}.")
+    if result.stop_reason:
+        notes.append(f"- Stopped early: {result.stop_reason}")
     if spent:
         notes.append(
             f"- Cost per mutant the Regress tests detect: {format_usd(spent.per_mutant_killed)}; "

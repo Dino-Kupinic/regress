@@ -89,3 +89,43 @@ def test_evaluation_start_launches_background_command(js_project: Path, monkeypa
         assert response.json()["status"] == "running"
         assert client.post("/api/evaluations", json={"mode": "oracle"}).status_code == 409
     assert commands[0][-1] == "--oracle"
+
+
+def test_full_evaluation_forwards_total_and_module_budgets(js_project, monkeypatch):
+    suites = js_project / "hidden-bugs"
+    suites.mkdir()
+    (suites / "math.json").write_text(json.dumps({"source": "src/math.ts", "test": "test/math.test.ts", "bugs": []}))
+    commands = []
+
+    class Process:
+        def poll(self):
+            return None
+
+        def send_signal(self, signum):
+            pass
+
+        def wait(self, timeout=None):
+            return 0
+
+    def launch(command, **kwargs):
+        commands.append(command)
+        return Process()
+
+    monkeypatch.setattr(evaluation_api.subprocess, "Popen", launch)
+    with TestClient(create_app(js_project), base_url="http://127.0.0.1") as client:
+        response = client.post("/api/evaluations", json={"mode": "full", "max_cost": 0.5, "max_total_cost": 2.0})
+        assert response.status_code == 202
+    assert commands[0][-4:] == ["--max-cost", "0.5", "--max-total-cost", "2.0"]
+
+
+def test_evaluation_rejects_unknown_prices_and_releases_reservation(js_project):
+    (js_project / "regress.toml").write_text('model = "openai-compatible:unknown"\n')
+    with TestClient(create_app(js_project), base_url="http://127.0.0.1") as client:
+        response = client.post("/api/evaluations", json={"mode": "full", "max_total_cost": 1.0})
+        assert response.status_code == 400 and "max_total_cost needs a price" in response.json()["detail"]
+        # A leaked reservation would make this a 409 instead of the normal no-suites response.
+        response = client.post("/api/evaluations", json={"mode": "oracle"})
+        assert response.status_code == 400 and "no hidden-bugs" in response.json()["detail"]
+        assert client.post("/api/evaluations", json={"mode": "oracle", "max_total_cost": 1}).status_code == 400
+        for budget in (0, -1, 10001):
+            assert client.post("/api/evaluations", json={"mode": "full", "max_total_cost": budget}).status_code == 422
