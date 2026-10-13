@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 from conftest import ScriptedFactory, ScriptedLLM
 from fastapi.testclient import TestClient
+from rich.text import Text
 from typer.testing import CliRunner
 
 from regress.api import create_app
@@ -175,11 +176,18 @@ def test_unknown_prices_are_refused_before_a_run(js_project):
 
 
 @pytest.mark.parametrize("total", ["1", "0.00001"])
-def test_cli_exposes_total_budget_and_oracle_rejects_it(js_project, total):
+@pytest.mark.parametrize("colored", [False, True])
+def test_cli_exposes_total_budget_and_oracle_rejects_it(js_project, total, colored, monkeypatch):
+    # CI forces Rich's terminal formatting; ANSI codes can split an option's two leading dashes.
+    monkeypatch.setattr("typer.rich_utils.FORCE_TERMINAL", colored)
+    monkeypatch.setattr("typer.rich_utils.COLOR_SYSTEM", "standard" if colored else None)
+    monkeypatch.delenv("NO_COLOR", raising=False)
     runner = CliRunner()
     for command in ("run", "eval"):
-        result = runner.invoke(app, [command, "--help"])
-        assert result.exit_code == 0 and "--max-total-cost" in result.output
+        result = runner.invoke(app, [command, "--help"], color=colored)
+        assert result.exit_code == 0 and "--max-total-cost" in Text.from_ansi(result.output).plain
+        if colored:
+            assert "\x1b[" in result.output
     (js_project / "hidden-bugs").mkdir()
     result = runner.invoke(app, ["eval", str(js_project), "--oracle", "--max-total-cost", total])
     assert result.exit_code == 1 and "not --oracle" in result.output
