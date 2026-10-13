@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.7.0 (2026-10-13)
+
+### Features
+
+- Add total budgets for batches and evaluations
+  ([`c6a5782`](https://github.com/Dino-Kupinic/regress/commit/c6a5782d9da21ecdce1034e517ac72d4837d162a))
+
+### Testing
+
+- Handle colored CLI help in CI
+  ([`b13808f`](https://github.com/Dino-Kupinic/regress/commit/b13808febf0f60a920a3112ae3755d7c69038663))
+
+
 ## v0.6.1 (2026-10-11)
 
 ### Performance Improvements
