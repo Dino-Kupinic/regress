@@ -1,6 +1,6 @@
 """Regress: improve AI-generated tests using mutation testing as feedback."""
 
-__version__ = "0.7.0"
+__version__ = "0.7.1"
 
 
 def main() -> None:

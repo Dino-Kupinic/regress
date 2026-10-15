@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.7.1 (2026-10-15)
+
+### Bug Fixes
+
+- **web**: Preserve settings edits and honor run defaults
+  ([`6b3a059`](https://github.com/Dino-Kupinic/regress/commit/6b3a0590fc5f8989312cbfa7b2ab051b155f1129))
+
+
 ## v0.7.0 (2026-10-13)
 
 ### Features
