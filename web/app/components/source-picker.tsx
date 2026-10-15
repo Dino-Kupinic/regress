@@ -1,5 +1,5 @@
 import { Check, ChevronDown, Search } from "lucide-react";
-import { type KeyboardEvent, useEffect, useRef, useState } from "react";
+import { type KeyboardEvent, useEffect, useId, useRef, useState } from "react";
 import { Button } from "~/components/ui/button";
 import {
   InputGroup,
@@ -49,6 +49,8 @@ export function SourcePicker({
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [highlight, setHighlight] = useState(0);
+  const popupId = useId();
+  const listId = useId();
   const list = useRef<HTMLDivElement>(null);
   const known = new Set(sources.map((item) => item.path));
   const pinned = query
@@ -91,10 +93,13 @@ export function SourcePicker({
       type="button"
       role="option"
       key={path}
+      id={`${listId}-option-${index}`}
+      tabIndex={-1}
       data-index={index}
       aria-selected={path === value}
       data-highlighted={index === highlight || undefined}
       onMouseMove={() => setHighlight(index)}
+      onMouseDown={(event) => event.preventDefault()}
       onClick={() => choose(path)}
       className="flex w-full min-w-0 items-center gap-2 rounded-sm px-2 py-1.5 text-left font-mono text-xs outline-none data-highlighted:bg-accent"
     >
@@ -122,7 +127,8 @@ export function SourcePicker({
       <PopoverTrigger asChild>
         <Button
           variant="ghost"
-          role="combobox"
+          aria-haspopup="dialog"
+          aria-controls={open ? popupId : undefined}
           aria-expanded={open}
           aria-label="Source file to run"
           className={cn(
@@ -136,6 +142,8 @@ export function SourcePicker({
         </Button>
       </PopoverTrigger>
       <PopoverContent
+        id={popupId}
+        aria-label="Choose a source file"
         align="start"
         className="w-[min(34rem,calc(100vw-2rem))] gap-0 p-0"
       >
@@ -146,6 +154,13 @@ export function SourcePicker({
             </InputGroupAddon>
             <InputGroupInput
               autoFocus
+              role="combobox"
+              aria-autocomplete="list"
+              aria-expanded={open}
+              aria-controls={listId}
+              aria-activedescendant={
+                options[highlight] ? `${listId}-option-${highlight}` : undefined
+              }
               aria-label="Search source files"
               placeholder={`Search ${sources.length} files`}
               value={query}
@@ -159,6 +174,7 @@ export function SourcePicker({
         </div>
         <div
           ref={list}
+          id={listId}
           role="listbox"
           aria-label="Source files"
           className="max-h-80 overflow-y-auto p-1 scroll-fade"

@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import {
   Link,
   type MetaFunction,
+  type ShouldRevalidateFunction,
   useLoaderData,
   useNavigate,
   useSearchParams,
@@ -76,6 +77,28 @@ export const meta: MetaFunction = () => [{ title: pageTitle("Runs") }];
 export async function clientLoader() {
   return { runs: await api.runs() };
 }
+
+export const shouldRevalidate: ShouldRevalidateFunction = ({
+  currentUrl,
+  nextUrl,
+  formMethod,
+  defaultShouldRevalidate,
+}) => {
+  if (
+    !formMethod &&
+    currentUrl.pathname === nextUrl.pathname &&
+    currentUrl.search !== nextUrl.search
+  ) {
+    const current = new URLSearchParams(currentUrl.search);
+    const next = new URLSearchParams(nextUrl.search);
+    for (const key of ["status", "source"]) {
+      current.delete(key);
+      next.delete(key);
+    }
+    if (current.toString() === next.toString()) return false;
+  }
+  return defaultShouldRevalidate;
+};
 
 const statuses = [
   "all",

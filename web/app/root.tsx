@@ -125,7 +125,7 @@ function AppShell() {
       ? "online"
       : "connecting";
   return (
-    <NewRunProvider project={project.data}>
+    <NewRunProvider project={project.data} settings={settings.data?.effective}>
       <NavigationProgress />
       <SidebarProvider defaultOpen={sidebarOpen}>
         <AppSidebar
