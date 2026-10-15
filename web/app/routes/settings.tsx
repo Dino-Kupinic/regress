@@ -146,12 +146,12 @@ export default function SettingsPage() {
     queryFn: api.project,
     initialData: initial.project,
   }).data;
-  const [draft, setDraft] = useState<Settings>(settings.effective);
+  const [overrides, setOverrides] = useState<Partial<Settings>>({});
+  const draft = { ...settings.effective, ...overrides };
   const models = useQuery({
     queryKey: ["models", draft.provider],
     queryFn: () => api.models(false, false, draft.provider),
   });
-  useEffect(() => setDraft(settings.effective), [settings]);
   const changed = Object.entries(draft).filter(
     ([key, value]) => value !== settings.effective[key as keyof Settings],
   );
@@ -160,15 +160,31 @@ export default function SettingsPage() {
       !Number.isInteger(draft[key]) || draft[key] < min || draft[key] > max,
   );
   const save = useMutation({
-    mutationFn: () =>
-      api.saveSettings(Object.fromEntries(changed) as Partial<Settings>),
-    onSuccess: (response) => {
+    mutationFn: api.saveSettings,
+    onSuccess: async (response, submitted) => {
       client.setQueryData(["settings"], response);
+      // Clear only the edits this request saved; keep anything typed meanwhile.
+      setOverrides((current) =>
+        Object.fromEntries(
+          Object.entries(current).filter(
+            ([key, value]) =>
+              !(key in submitted) || value !== submitted[key as keyof Settings],
+          ),
+        ),
+      );
       toast.success("Settings saved");
+      await Promise.all([
+        client.invalidateQueries({ queryKey: ["models"] }),
+        client.invalidateQueries({ queryKey: ["estimate"] }),
+        client.invalidateQueries({ queryKey: ["evaluation-estimate"] }),
+        client.invalidateQueries({ queryKey: ["project"] }),
+      ]);
     },
   });
+  const saveChanges = () =>
+    save.mutate(Object.fromEntries(changed) as Partial<Settings>);
   const update = <K extends keyof Settings>(key: K, value: Settings[K]) =>
-    setDraft((old) => ({ ...old, [key]: value }));
+    setOverrides((old) => ({ ...old, [key]: value }));
   // Typed text, so "0." survives until the next digit; follows the draft when it changes elsewhere (Discard).
   const [budgetText, setBudgetText] = useState(
     draft.max_cost == null ? "" : String(draft.max_cost),
@@ -205,7 +221,7 @@ export default function SettingsPage() {
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key === "s") {
         event.preventDefault();
-        if (canSave) save.mutate();
+        if (canSave) saveChanges();
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -218,7 +234,7 @@ export default function SettingsPage() {
       : []);
   const changeProvider = (provider: Provider) =>
     // A model belongs to one provider: switching starts from the new provider's default.
-    setDraft((old) => ({
+    setOverrides((old) => ({
       ...old,
       provider,
       model:
@@ -483,14 +499,14 @@ export default function SettingsPage() {
                 variant="ghost"
                 className="@[21rem]/save:w-auto"
                 disabled={!changed.length}
-                onClick={() => setDraft(settings.effective)}
+                onClick={() => setOverrides({})}
               >
                 Discard
               </Button>
               <Button
                 className="@[21rem]/save:w-auto"
                 disabled={!canSave}
-                onClick={() => save.mutate()}
+                onClick={saveChanges}
               >
                 {save.isPending && <Spinner data-icon="inline-start" />}
                 Save changes

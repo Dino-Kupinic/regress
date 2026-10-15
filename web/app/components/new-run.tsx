@@ -50,7 +50,12 @@ import {
 import { Skeleton } from "~/components/ui/skeleton";
 import { Spinner } from "~/components/ui/spinner";
 import { Switch } from "~/components/ui/switch";
-import { api, type CostEstimate, type ProjectInfo } from "~/lib/api";
+import {
+  api,
+  type CostEstimate,
+  type ProjectInfo,
+  type Settings,
+} from "~/lib/api";
 import { copyToClipboard } from "~/lib/clipboard";
 import { fileName, usd } from "~/lib/utils";
 
@@ -68,15 +73,18 @@ const MAX_FILES = 100;
 export function NewRunProvider({
   children,
   project,
+  settings,
 }: {
   children: ReactNode;
   project?: ProjectInfo;
+  settings?: Settings;
 }) {
   const [opened, setOpened] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
   const [search, setSearch] = useState("");
   const [model, setModel] = useState(DEFAULT_MODEL);
-  const [rounds, setRounds] = useState(1);
+  const [roundsOverride, setRounds] = useState<number>();
+  const rounds = roundsOverride ?? settings?.rounds ?? 1;
   const [baseline, setBaseline] = useState(false);
   const [generate, setGenerate] = useState(true);
   const [budget, setBudget] = useState("");
@@ -90,7 +98,7 @@ export function NewRunProvider({
     enabled: opened,
   });
   const models = useQuery({
-    queryKey: ["models"],
+    queryKey: ["models", settings?.provider, settings?.model],
     queryFn: () => api.models(),
     enabled: opened,
   });
@@ -124,7 +132,14 @@ export function NewRunProvider({
     maxCost !== undefined &&
     !(Number.isFinite(maxCost) && maxCost > 0 && maxCost <= 10_000);
   const estimate = useQuery({
-    queryKey: ["estimate", selected, model, rounds, generate || !hasTests],
+    queryKey: [
+      "estimate",
+      settings,
+      selected,
+      model,
+      rounds,
+      generate || !hasTests,
+    ],
     queryFn: () =>
       api.estimate({
         sources: selected,
@@ -134,7 +149,6 @@ export function NewRunProvider({
       }),
     enabled: opened && selected.length > 0 && loaded && !failed.length,
     staleTime: 30_000,
-    placeholderData: (previous) => previous,
   });
   const run = useMutation({
     mutationFn: () => {
@@ -188,7 +202,7 @@ export function NewRunProvider({
     setModel(DEFAULT_MODEL);
     setBaseline(false);
     setGenerate(true);
-    setRounds(1);
+    setRounds(undefined);
     setBudget("");
     setTotalBudget("");
     setOpened(true);
