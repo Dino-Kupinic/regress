@@ -49,6 +49,7 @@ import { Skeleton } from "~/components/ui/skeleton";
 import { Spinner } from "~/components/ui/spinner";
 import { Switch } from "~/components/ui/switch";
 import { api, type Provider, providerLabels, type Settings } from "~/lib/api";
+import { refreshModels } from "~/lib/models";
 import { cn, pageTitle } from "~/lib/utils";
 
 export const meta: MetaFunction = () => [{ title: pageTitle("Settings") }];
@@ -152,6 +153,10 @@ export default function SettingsPage() {
     queryKey: ["models", draft.provider],
     queryFn: () => api.models(false, false, draft.provider),
   });
+  const refresh = useMutation({
+    mutationFn: (provider: Provider) => refreshModels(client, provider),
+  });
+  const refreshing = refresh.isPending && refresh.variables === draft.provider;
   const changed = Object.entries(draft).filter(
     ([key, value]) => value !== settings.effective[key as keyof Settings],
   );
@@ -227,11 +232,15 @@ export default function SettingsPage() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   });
-  const modelList =
-    models.data?.models ??
-    (draft.model
-      ? [{ id: draft.model, created_date: "", newest: false, default: true }]
-      : []);
+  const modelList = [...(models.data?.models ?? [])];
+  if (draft.model && !modelList.some((item) => item.id === draft.model)) {
+    modelList.unshift({
+      id: draft.model,
+      created_date: "",
+      newest: false,
+      default: draft.model === settings.effective.model,
+    });
+  }
   const changeProvider = (provider: Provider) =>
     // A model belongs to one provider: switching starts from the new provider's default.
     setOverrides((old) => ({
@@ -263,10 +272,12 @@ export default function SettingsPage() {
                 <Button
                   variant="ghost"
                   size="sm"
-                  disabled={models.isFetching}
-                  onClick={() => models.refetch()}
+                  disabled={models.isFetching || refreshing}
+                  onClick={() => refresh.mutate(draft.provider)}
                 >
-                  {models.isFetching && <Spinner data-icon="inline-start" />}
+                  {(models.isFetching || refreshing) && (
+                    <Spinner data-icon="inline-start" />
+                  )}
                   Refresh models
                 </Button>
               }
@@ -307,6 +318,16 @@ export default function SettingsPage() {
               <p className="text-caption text-muted-foreground">
                 {models.data.note}; {models.data.description}.
               </p>
+            )}
+            {refresh.isError && refresh.variables === draft.provider && (
+              <Alert variant="destructive">
+                <CircleAlert />
+                <AlertTitle>Could not refresh models</AlertTitle>
+                <AlertDescription>
+                  {refresh.error.message}. Your model selection and unsaved
+                  settings are unchanged.
+                </AlertDescription>
+              </Alert>
             )}
             <Card className="gap-0 overflow-hidden py-0">
               {models.isPending ? (
