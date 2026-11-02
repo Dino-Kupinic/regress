@@ -332,12 +332,12 @@ stream.addEventListener("end", (e) => {
 
 Each run executes in a process of its own. Cancelling sends it SIGINT, like Ctrl-C in `regress run`: the model call, Vitest or Stryker stops at once, the test file is restored, and the run ends as `cancelled`. Stopping the server cancels a run in progress the same way.
 
-The API defaults to local access. For hosting, the bundled [Nginx deployment](docs/content/docs/deployment/application.mdx) provides authentication:
+The API defaults to local access. The bundled [Nginx deployment](docs/content/docs/deployment/application.mdx) serves the frontend and API without a login prompt. Restrict access to trusted users through your hosting environment.
 
 - It listens on 127.0.0.1 and answers only requests addressed to a local host name, which stops DNS rebinding.
 - Browsers can call it only from allowed origins: `http://localhost:5173` and `http://127.0.0.1:5173` by default. `--origin` is repeatable and replaces that pair. Requests that change something and come from another origin get `403`, including simple requests that skip the CORS preflight. `GET`, `HEAD`, and `OPTIONS` pass that check, as do clients that send no `Origin` header, such as `curl`.
 - API keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) stay on the server, and `base_url` / `api_key_env` can't be changed over HTTP. Only JavaScript and TypeScript files outside hidden and dependency folders can be read, so `.env` is never served.
-- Binding beyond loopback requires `--allow-remote`. Keep the API port private and expose only the authenticated proxy.
+- Binding beyond loopback requires `--allow-remote`. Keep the API port private and restrict access to the proxy.
 
 API runs, evaluations and dependency installs share one exclusive project reservation. A second API server does not take the project while the first still holds it. It answers readiness checks during that wait, then exits if the lock is still held after 30 seconds. Do not run CLI mutation jobs against a project currently served by the API. The backend's process supervision and project locking require Linux or macOS.
 
@@ -393,7 +393,7 @@ uv run ruff format --check src tests
 
 The integration tests drive the full pipeline with a scripted model against real Vitest and Stryker. They cover improvement, repair of failing candidates, rejection with rollback, test file creation, hidden-bug checks, and runs started, streamed and cancelled over HTTP.
 
-The Backend GitHub Actions workflow runs lint, formatting, unit and integration tests, then builds the production container and smoke-tests readiness and proxy authentication. Tests use scripted models and do not call OpenAI.
+The Backend GitHub Actions workflow runs lint, formatting, unit and integration tests, then builds the production container and smoke-tests readiness and access without login. Tests use scripted models and do not call a model provider.
 
 Versions follow [Semantic Versioning](https://semver.org) and are released automatically. When the Backend workflow passes on a push to `main` (including a merged pull request), the Release workflow reads the [Conventional Commits](https://www.conventionalcommits.org) since the last tag: `feat:` makes a minor release, `fix:` or `perf:` a patch, and `docs:`, `chore:` and the like make none. A release bumps the version, updates `CHANGELOG.md`, tags `vX.Y.Z` and publishes a GitHub Release. [Develop Regress](docs/content/docs/getting-started/development.mdx#commit-messages-and-releases) has the details.
 
@@ -420,4 +420,4 @@ Code map (`src/regress/`):
 
 ## Scope and roadmap
 
-Regress covers TypeScript/JavaScript with Vitest and StrykerJS. Each run pairs one source file with one test file; the CLI can run several files in a row (`regress run src/`, `--changed main`), the web app one at a time. Hosted deployments serve one trusted project and one operator group per instance. Independent users or untrusted repositories require separate isolated workers, credentials and storage.
+Regress covers TypeScript/JavaScript with Vitest and StrykerJS. Each run pairs one source file with one test file. The CLI can run several files in a row (`regress run src/`, `--changed main`), and the web app can run up to 100 selected files sequentially. Its batch page links to each run; cancelling a batch stops the current run and starts no more files. The web app serves one project at a time and uses automatic test-file discovery. Hosted deployments serve one trusted project and one operator group per instance. Independent users or untrusted repositories require separate isolated workers, credentials and storage.
