@@ -228,3 +228,84 @@ test("overlapping providers keep separate pending state and cache entries", asyn
   ).toBeVisible();
   expect(refreshes).toEqual(["openai", "anthropic"]);
 });
+
+test("overlapping refresh errors stay with their provider until retry succeeds", async ({
+  page,
+}) => {
+  let failOpenai!: () => void;
+  let finishAnthropic!: () => void;
+  const openai = new Promise<void>((resolve) => {
+    failOpenai = resolve;
+  });
+  const anthropic = new Promise<void>((resolve) => {
+    finishAnthropic = resolve;
+  });
+  const refreshes: string[] = [];
+  await page.route("**/api/models?**", async (route) => {
+    const url = new URL(route.request().url());
+    const provider = url.searchParams.get("provider") as Provider;
+    const refresh = url.searchParams.get("refresh") === "true";
+    if (refresh) {
+      refreshes.push(provider);
+      if (
+        provider === "openai" &&
+        refreshes.filter((item) => item === "openai").length === 1
+      ) {
+        await openai;
+        await route.fulfill({
+          status: 503,
+          json: { detail: "OpenAI unavailable" },
+        });
+        return;
+      }
+      if (provider === "anthropic") await anthropic;
+    }
+    await route.fulfill({
+      json: catalog(provider, [
+        provider === "openai"
+          ? refresh
+            ? "gpt-new"
+            : "gpt-selected"
+          : "claude-selected",
+      ]),
+    });
+  });
+  await page.goto("/settings");
+  const refresh = page.getByRole("button", { name: "Refresh models" });
+  await expect(refresh).toBeEnabled();
+  await refresh.click();
+  await expect.poll(() => refreshes).toEqual(["openai"]);
+  await selectProvider(page, "Anthropic");
+  await expect(refresh).toBeEnabled();
+  await refresh.click();
+  await expect.poll(() => refreshes).toEqual(["openai", "anthropic"]);
+
+  failOpenai();
+  await selectProvider(page, "OpenAI");
+  await expect(
+    page.getByText("Could not refresh models", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText(/OpenAI unavailable/)).toBeVisible();
+  await expect(
+    page.getByRole("radio", { name: "gpt-selected", exact: true }),
+  ).toBeChecked();
+  await selectProvider(page, "Anthropic");
+  await expect(
+    page.getByText("Could not refresh models", { exact: true }),
+  ).toHaveCount(0);
+  finishAnthropic();
+  await expect(refresh).toBeEnabled();
+  await selectProvider(page, "OpenAI");
+  await expect(
+    page.getByText("Could not refresh models", { exact: true }),
+  ).toBeVisible();
+
+  await refresh.click();
+
+  await expect(
+    page.getByRole("radio", { name: "gpt-new", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Could not refresh models", { exact: true }),
+  ).toHaveCount(0);
+});

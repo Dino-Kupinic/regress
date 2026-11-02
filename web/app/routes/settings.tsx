@@ -1,6 +1,6 @@
 import {
-  useIsMutating,
   useMutation,
+  useMutationState,
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
@@ -162,11 +162,14 @@ export default function SettingsPage() {
     mutationKey: ["refresh-models"],
     mutationFn: (provider: Provider) => refreshModels(client, provider),
   });
-  const refreshing =
-    useIsMutating({
+  const refreshState = useMutationState({
+    filters: {
       mutationKey: ["refresh-models"],
       predicate: (mutation) => mutation.state.variables === draft.provider,
-    }) > 0;
+    },
+    select: (mutation) => mutation.state,
+  }).at(-1);
+  const refreshing = refreshState?.status === "pending";
   const changed = Object.entries(draft).filter(
     ([key, value]) => value !== settings.effective[key as keyof Settings],
   );
@@ -329,13 +332,13 @@ export default function SettingsPage() {
                 {models.data.note}; {models.data.description}.
               </p>
             )}
-            {refresh.isError && refresh.variables === draft.provider && (
+            {refreshState?.status === "error" && (
               <Alert variant="destructive">
                 <CircleAlert />
                 <AlertTitle>Could not refresh models</AlertTitle>
                 <AlertDescription>
-                  {refresh.error.message}. Your model selection and unsaved
-                  settings are unchanged.
+                  {refreshState.error?.message}. Your model selection and
+                  unsaved settings are unchanged.
                 </AlertDescription>
               </Alert>
             )}
