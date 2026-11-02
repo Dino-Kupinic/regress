@@ -1,7 +1,14 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.5.14/schema.json",
   "files": {
-    "includes": ["app/**", "*.ts", "*.json", "!**/.react-router", "!**/build"]
+    "includes": [
+      "app/**",
+      "tests/**",
+      "*.ts",
+      "*.json",
+      "!**/.react-router",
+      "!**/build"
+    ]
   },
   "formatter": { "indentStyle": "space", "indentWidth": 2 },
   "javascript": { "formatter": { "quoteStyle": "double" } },

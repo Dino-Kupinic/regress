@@ -1,4 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useIsMutating,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { CircleAlert } from "lucide-react";
 import { useEffect, useState } from "react";
 import { type MetaFunction, useBlocker, useLoaderData } from "react-router";
@@ -154,9 +159,14 @@ export default function SettingsPage() {
     queryFn: () => api.models(false, false, draft.provider),
   });
   const refresh = useMutation({
+    mutationKey: ["refresh-models"],
     mutationFn: (provider: Provider) => refreshModels(client, provider),
   });
-  const refreshing = refresh.isPending && refresh.variables === draft.provider;
+  const refreshing =
+    useIsMutating({
+      mutationKey: ["refresh-models"],
+      predicate: (mutation) => mutation.state.variables === draft.provider,
+    }) > 0;
   const changed = Object.entries(draft).filter(
     ([key, value]) => value !== settings.effective[key as keyof Settings],
   );
