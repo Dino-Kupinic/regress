@@ -163,12 +163,11 @@ export default function SettingsPage() {
     mutationFn: (provider: Provider) => refreshModels(client, provider),
   });
   const refreshState = useMutationState({
-    filters: {
-      mutationKey: ["refresh-models"],
-      predicate: (mutation) => mutation.state.variables === draft.provider,
-    },
+    filters: { mutationKey: ["refresh-models"] },
     select: (mutation) => mutation.state,
-  }).at(-1);
+  })
+    .filter((state) => state.variables === draft.provider)
+    .at(-1);
   const refreshing = refreshState?.status === "pending";
   const changed = Object.entries(draft).filter(
     ([key, value]) => value !== settings.effective[key as keyof Settings],
