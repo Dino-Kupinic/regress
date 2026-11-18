@@ -70,7 +70,7 @@ Open **Runs** at `/runs` to browse saved runs, filter by source file and status,
 
 ## Change settings
 
-Open **Settings** at `/settings`. You can choose a personal default, toggle the CLI model question, select a reasoning effort, and edit run defaults, timeouts, or runner preference. **Refresh models** reloads that short list from the API. It does not pass `refresh=true`, so a catalog cached for less than a day is reused. Fetch again with `regress models --refresh` or `GET /api/models?refresh=true`. Choose **Save changes** to persist edits or **Discard** to restore the loaded values.
+Open **Settings** at `/settings`. You can choose a personal default, toggle the CLI model question, select a reasoning effort, and edit run defaults, timeouts, or runner preference. **Refresh models** requests a fresh short list for the selected provider and bypasses the server's catalog cache. The page can use the cached catalog on its initial load. A refresh keeps your selected model and unsaved settings. If the provider cannot be reached, a note explains the fallback and the existing list remains available. Choose **Save changes** to persist edits or **Discard** to restore the loaded values.
 
 Settings are saved to the server user's personal Regress configuration. A project's `regress.toml` or environment variables can still override them. The page shows the model's source and the order of configuration layers. In a hosted deployment these are shared server settings, not per-browser preferences.
 

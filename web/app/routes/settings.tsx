@@ -1,4 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useMutationState,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { CircleAlert } from "lucide-react";
 import { useEffect, useState } from "react";
 import { type MetaFunction, useBlocker, useLoaderData } from "react-router";
@@ -49,6 +54,7 @@ import { Skeleton } from "~/components/ui/skeleton";
 import { Spinner } from "~/components/ui/spinner";
 import { Switch } from "~/components/ui/switch";
 import { api, type Provider, providerLabels, type Settings } from "~/lib/api";
+import { refreshModels } from "~/lib/models";
 import { cn, pageTitle } from "~/lib/utils";
 
 export const meta: MetaFunction = () => [{ title: pageTitle("Settings") }];
@@ -152,6 +158,17 @@ export default function SettingsPage() {
     queryKey: ["models", draft.provider],
     queryFn: () => api.models(false, false, draft.provider),
   });
+  const refresh = useMutation({
+    mutationKey: ["refresh-models"],
+    mutationFn: (provider: Provider) => refreshModels(client, provider),
+  });
+  const refreshState = useMutationState({
+    filters: { mutationKey: ["refresh-models"] },
+    select: (mutation) => mutation.state,
+  })
+    .filter((state) => state.variables === draft.provider)
+    .at(-1);
+  const refreshing = refreshState?.status === "pending";
   const changed = Object.entries(draft).filter(
     ([key, value]) => value !== settings.effective[key as keyof Settings],
   );
@@ -227,11 +244,15 @@ export default function SettingsPage() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   });
-  const modelList =
-    models.data?.models ??
-    (draft.model
-      ? [{ id: draft.model, created_date: "", newest: false, default: true }]
-      : []);
+  const modelList = [...(models.data?.models ?? [])];
+  if (draft.model && !modelList.some((item) => item.id === draft.model)) {
+    modelList.unshift({
+      id: draft.model,
+      created_date: "",
+      newest: false,
+      default: draft.model === settings.effective.model,
+    });
+  }
   const changeProvider = (provider: Provider) =>
     // A model belongs to one provider: switching starts from the new provider's default.
     setOverrides((old) => ({
@@ -263,10 +284,12 @@ export default function SettingsPage() {
                 <Button
                   variant="ghost"
                   size="sm"
-                  disabled={models.isFetching}
-                  onClick={() => models.refetch()}
+                  disabled={models.isFetching || refreshing}
+                  onClick={() => refresh.mutate(draft.provider)}
                 >
-                  {models.isFetching && <Spinner data-icon="inline-start" />}
+                  {(models.isFetching || refreshing) && (
+                    <Spinner data-icon="inline-start" />
+                  )}
                   Refresh models
                 </Button>
               }
@@ -307,6 +330,16 @@ export default function SettingsPage() {
               <p className="text-caption text-muted-foreground">
                 {models.data.note}; {models.data.description}.
               </p>
+            )}
+            {refreshState?.status === "error" && (
+              <Alert variant="destructive">
+                <CircleAlert />
+                <AlertTitle>Could not refresh models</AlertTitle>
+                <AlertDescription>
+                  {refreshState.error?.message}. Your model selection and
+                  unsaved settings are unchanged.
+                </AlertDescription>
+              </Alert>
             )}
             <Card className="gap-0 overflow-hidden py-0">
               {models.isPending ? (

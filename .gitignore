@@ -11,3 +11,5 @@ node_modules/
 .stryker-tmp/
 .env
 .DS_Store
+playwright-report/
+test-results/
