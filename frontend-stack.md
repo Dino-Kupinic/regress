@@ -37,12 +37,12 @@ regress/
 └── uv.lock
 ```
 
-The web app talks to the Python API over localhost. Python starts and tracks runs, invokes the existing mutation tools, reads result files, and holds `OPENAI_API_KEY`. The key must stay out of browser code and client-exposed Vite environment variables.
+The web app talks to the Python API over localhost. Python starts and tracks runs, invokes the existing mutation tools, reads result files, and holds provider credentials. Keys must stay out of browser code and client-exposed Vite environment variables.
 
 ## What the UI does
 
 1. The dashboard at `/` shows the served project, eligible source files, recent results, and measured mutation scores.
-2. **New run** starts work in the API process. The run page polls elapsed time, activity, and errors, and can cancel the run.
+2. **New run** starts one file or a sequential batch of up to 100 files. The batch page at `/batches/:id` links to each run and can cancel the current run and remaining files. The run page polls elapsed time, activity, and errors, and can cancel the run.
 3. A finished run shows the score, mutants, test snapshots, and a diff of the kept tests.
 
 `POST /api/runs` returns `202` with the run ID immediately. The pipeline runs in its own process, so a long mutation stays visible and cancellable.

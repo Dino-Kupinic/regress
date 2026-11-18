@@ -25,7 +25,7 @@ The agent still needs the `regress` command. See [Installation](/docs/getting-st
 
 ## What the skill tells the agent
 
-- Runs call OpenAI on your key, so the agent starts a run only when you ask for one, and asks before running Regress over several files.
+- Runs use the configured model provider and may incur charges, so the agent starts a run only when you ask for one, and asks before running Regress over several files. See [Model providers](/docs/reference/providers) for credentials and local servers.
 - It checks `git status` before a run and shows you the test file's diff afterwards.
 - It passes `--yes` or `--model` so a run never waits on the model question, and `regress init --yes` so installs don't stop at a prompt. Run with no input and without `--yes`, `regress init` only reports what is missing.
 - It waits out long runs instead of killing them, and interrupts with SIGINT so the test file is restored.
