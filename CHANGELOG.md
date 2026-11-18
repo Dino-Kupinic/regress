@@ -2,6 +2,28 @@
 
 <!-- version list -->
 
+## v0.7.2 (2026-11-18)
+
+### Bug Fixes
+
+- **web**: Fetch a fresh provider catalog (WRK-148)
+  ([`0d97ec2`](https://github.com/Dino-Kupinic/regress/commit/0d97ec20da9c868cb7388b7c3d2e2ab206e70f4b))
+
+- **web**: Retain refresh errors for each provider
+  ([`75fcf58`](https://github.com/Dino-Kupinic/regress/commit/75fcf5847989a7af1feb5c940417feb8ce87fa81))
+
+- **web**: Select provider refresh state during render
+  ([`5d4be92`](https://github.com/Dino-Kupinic/regress/commit/5d4be92692dc5100d7e8f9316e6166148ecd35b6))
+
+- **web**: Track pending refreshes for each provider
+  ([`5259ee2`](https://github.com/Dino-Kupinic/regress/commit/5259ee2bbf089fa84b962d54e9f56fbe4827ace4))
+
+### Documentation
+
+- Align guides with current capabilities
+  ([`b41508d`](https://github.com/Dino-Kupinic/regress/commit/b41508dda9dcc7567f5a65188b1d1df02ca77f9b))
+
+
 ## v0.7.1 (2026-10-15)
 
 ### Bug Fixes
